@@ -16,9 +16,34 @@ class TestSimDxUI(unittest.TestCase):
     def setUpClass(cls):
         cls.app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app.py"))
 
-    def test_app_initial_load(self):
-        """Kiểm tra khởi động ban đầu của app.py."""
+    def test_login_gate(self):
+        """Kiểm tra màn hình khóa và xác thực mật khẩu."""
         at = AppTest.from_file(self.app_path, default_timeout=30)
+        at.run()
+        # Ban đầu khi chưa nhập mật khẩu, dừng lại ở màn hình khóa
+        self.assertEqual(len(at.exception), 0)
+        self.assertFalse(at.session_state.get("authenticated", False))
+        
+        # Nhập sai mật khẩu
+        pwd_inputs = [w for w in at.text_input]
+        self.assertTrue(len(pwd_inputs) > 0)
+        pwd_inputs[0].input("sai_mat_khau")
+        submit_btn = [b for b in at.button if "Đăng nhập" in b.label or "submit" in b.key.lower()]
+        self.assertTrue(len(submit_btn) > 0)
+        submit_btn[0].click().run()
+        self.assertFalse(at.session_state.get("authenticated", False))
+        
+        # Nhập đúng mật khẩu
+        pwd_inputs = [w for w in at.text_input]
+        pwd_inputs[0].input("ngovietcuongkhongchodung1112")
+        submit_btn = [b for b in at.button if "Đăng nhập" in b.label or "submit" in b.key.lower()]
+        submit_btn[0].click().run()
+        self.assertTrue(at.session_state.get("authenticated", False))
+
+    def test_app_initial_load(self):
+        """Kiểm tra khởi động ban đầu của app.py khi đã đăng nhập."""
+        at = AppTest.from_file(self.app_path, default_timeout=30)
+        at.session_state["authenticated"] = True
         at.run()
         self.assertEqual(len(at.exception), 0, f"App raised exceptions on startup: {at.exception}")
 
@@ -44,6 +69,7 @@ class TestSimDxUI(unittest.TestCase):
     def test_app_full_fit_and_all_tabs(self):
         """Kiểm tra toàn bộ 5 tab sau khi chạy SAEM."""
         at = AppTest.from_file(self.app_path, default_timeout=60)
+        at.session_state["authenticated"] = True
         at.run()
         self.assertEqual(len(at.exception), 0)
 

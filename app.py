@@ -873,7 +873,55 @@ def show_fit(res, clinical_data=None):
         st.dataframe(pd.DataFrame(b_summary), width="stretch")
 
 
+MASTER_PASSWORD = "ngovietcuongkhongchodung1112"
+
+
+def check_authentication():
+    """Kiểm tra xác thực mật khẩu trước khi cho phép truy cập SimDx."""
+    if st.session_state.get("authenticated", False):
+        return True
+
+    # Center card layout
+    c1, c2, c3 = st.columns([1, 1.8, 1])
+    with c2:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="text-align: center; margin-bottom: 24px;">
+            <div style="display: inline-block; padding: 14px; background: #e0f2fe; border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(13, 51, 104, 0.08);">
+                <span style="font-size: 42px;">🔐</span>
+            </div>
+            <h2 style="color: #0d3368; font-weight: 800; margin-bottom: 4px; letter-spacing: -0.5px;">SimDx — NLME Platform</h2>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0;">Nonlinear Mixed-Effects Modeling · Cổng bảo mật</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        with st.form("login_form", clear_on_submit=False):
+            st.markdown("##### Nhập mật khẩu truy cập:")
+            pwd = st.text_input("Mật khẩu", type="password", placeholder="Nhập mật khẩu được cấp...", label_visibility="collapsed")
+            submit = st.form_submit_button("Đăng nhập vào hệ thống", type="primary", use_container_width=True)
+            
+            if submit:
+                valid_passwords = [MASTER_PASSWORD]
+                try:
+                    if hasattr(st, "secrets") and "PASSWORD" in st.secrets:
+                        valid_passwords.append(str(st.secrets["PASSWORD"]))
+                except Exception:
+                    pass
+                
+                if pwd in valid_passwords:
+                    st.session_state["authenticated"] = True
+                    st.success("✅ Xác thực thành công! Đang chuyển hướng...")
+                    st.rerun()
+                else:
+                    st.error("❌ Mật khẩu không chính xác. Vui lòng thử lại!")
+        
+        st.caption("<div style='text-align:center; color:#94a3b8; font-size:12px; margin-top:16px;'>Hệ thống được bảo vệ bản quyền · Ngô Việt Cường</div>", unsafe_allow_html=True)
+    
+    st.stop()
+
+
 def main():
+    check_authentication()
     with st.sidebar:
         logo_html = (
             f'<img src="data:image/png;base64,{LOGO_B64}" '
@@ -1002,6 +1050,13 @@ def main():
         n_iter2 = st.slider("K2: pha smoothing (γ=1/k)", 25, 400, 150, 25)
         n_chains = st.slider("Số chain", 1, 3, 1)
         fit_seed = st.number_input("Seed SAEM", 0, 9999, 42)
+
+        st.markdown("---")
+        c_out1, c_out2 = st.columns([1.5, 1])
+        c_out1.caption("👤 Đã xác thực")
+        if c_out2.button("Đăng xuất", key="btn_logout", type="secondary", use_container_width=True):
+            st.session_state["authenticated"] = False
+            st.rerun()
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         ":material/database: Dữ liệu & PKanalix",
