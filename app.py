@@ -26,6 +26,12 @@ if os.path.exists(LOGO_PATH):
     with open(LOGO_PATH, "rb") as _f:
         LOGO_B64 = base64.b64encode(_f.read()).decode()
 
+CAT_PATH = os.path.join(os.path.dirname(__file__), "assets", "cat_meme.jpg")
+CAT_B64 = ""
+if os.path.exists(CAT_PATH):
+    with open(CAT_PATH, "rb") as _f:
+        CAT_B64 = base64.b64encode(_f.read()).decode()
+
 st.set_page_config(
     page_title="SimDx — NLME Pharmacometrics",
     page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else ":material/biotech:",
@@ -881,25 +887,101 @@ def check_authentication():
     if st.session_state.get("authenticated", False):
         return True
 
+    is_failed = st.session_state.get("login_failed", False)
+
     # Center card layout
     c1, c2, c3 = st.columns([1, 1.8, 1])
     with c2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        logo_display = (
-            f'<img src="data:image/png;base64,{LOGO_B64}" style="width: 88px; height: 88px; object-fit: contain; filter: drop-shadow(0 6px 16px rgba(13, 51, 104, 0.15)); margin-bottom: 10px;">'
-        ) if LOGO_B64 else '<div style="display: inline-block; padding: 14px; background: #e0f2fe; border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(13, 51, 104, 0.08);"><span style="font-size: 42px;">🔐</span></div>'
-        st.markdown(f"""
-        <div style="text-align: center; margin-bottom: 24px;">
-            {logo_display}
-            <h2 style="color: #0d3368; font-weight: 800; margin-bottom: 4px; letter-spacing: -0.5px;">Spass</h2>
-            <p style="color: #64748b; font-size: 14px; margin-top: 0;">inb Bảnh để có pass</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        if is_failed and CAT_B64:
+            st.markdown(f"""
+            <style>
+            @keyframes zoomGrowCat {{
+                0% {{
+                    transform: scale(0.15) rotate(-6deg);
+                    opacity: 0;
+                }}
+                50% {{
+                    transform: scale(1.18) rotate(3deg);
+                    opacity: 1;
+                }}
+                75% {{
+                    transform: scale(0.95) rotate(-1deg);
+                    opacity: 1;
+                }}
+                100% {{
+                    transform: scale(1.0) rotate(0deg);
+                    opacity: 1;
+                }}
+            }}
+            @keyframes textPopUp {{
+                0% {{
+                    opacity: 0;
+                    transform: scale(0.4) translateY(20px);
+                }}
+                60% {{
+                    opacity: 0;
+                    transform: scale(0.6);
+                }}
+                85% {{
+                    opacity: 1;
+                    transform: scale(1.15) translateY(-4px);
+                }}
+                100% {{
+                    opacity: 1;
+                    transform: scale(1.0) translateY(0);
+                }}
+            }}
+            .cat-container {{
+                animation: zoomGrowCat 1.0s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                margin-bottom: 8px;
+            }}
+            .cat-img {{
+                width: 240px;
+                height: 240px;
+                object-fit: cover;
+                border-radius: 24px;
+                box-shadow: 0 12px 36px rgba(225, 29, 72, 0.4);
+                border: 4px solid #f43f5e;
+            }}
+            .huge-error-text {{
+                animation: textPopUp 1.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+                color: #e11d48;
+                font-size: 34px;
+                font-weight: 900;
+                text-align: center;
+                margin: 12px 0 18px 0;
+                letter-spacing: -0.5px;
+                text-shadow: 0 3px 12px rgba(225, 29, 72, 0.3);
+                line-height: 1.2;
+            }}
+            </style>
+            <div style="text-align: center;">
+                <div class="cat-container">
+                    <img src="data:image/jpeg;base64,{CAT_B64}" class="cat-img" alt="Cat Suspicious"/>
+                </div>
+                <div class="huge-error-text">Á à :) xin phép chưa ????</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            logo_display = (
+                f'<img src="data:image/png;base64,{LOGO_B64}" style="width: 88px; height: 88px; object-fit: contain; filter: drop-shadow(0 6px 16px rgba(13, 51, 104, 0.15)); margin-bottom: 10px;">'
+            ) if LOGO_B64 else '<div style="display: inline-block; padding: 14px; background: #e0f2fe; border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(13, 51, 104, 0.08);"><span style="font-size: 42px;">🔐</span></div>'
+            st.markdown(f"""
+            <div style="text-align: center; margin-bottom: 24px;">
+                {logo_display}
+                <h2 style="color: #0d3368; font-weight: 800; margin-bottom: 4px; letter-spacing: -0.5px;">Spass</h2>
+                <p style="color: #64748b; font-size: 14px; margin-top: 0;">inb Bảnh để có pass</p>
+            </div>
+            """, unsafe_allow_html=True)
         
         with st.form("login_form", clear_on_submit=False):
-            st.markdown("##### bát's là gì ?")
+            st.markdown("##### bát's là gì ?" if not is_failed else "##### Nhập lại mật khẩu cho đúng:")
             pwd = st.text_input("Mật khẩu", type="password", placeholder="Hỏi NVC đi", label_visibility="collapsed")
-            submit = st.form_submit_button("Vào hệ thống của bảnh", type="primary", use_container_width=True)
+            submit = st.form_submit_button("Vào hệ thống của bảnh" if not is_failed else "Thử lại lần nữa", type="primary", use_container_width=True)
             
             if submit:
                 valid_passwords = [MASTER_PASSWORD]
@@ -911,11 +993,18 @@ def check_authentication():
                 
                 if pwd in valid_passwords:
                     st.session_state["authenticated"] = True
+                    st.session_state["login_failed"] = False
                     st.success("Ngô Việt Cường đã chốt bạn ")
                     st.rerun()
                 else:
-                    st.error("Á à :) xin phép chưa ????")
+                    st.session_state["login_failed"] = True
+                    st.rerun()
         
+        if is_failed:
+            if st.button("⬅️ Quay lại", use_container_width=True):
+                st.session_state["login_failed"] = False
+                st.rerun()
+
         st.caption("<div style='text-align:center; color:#94a3b8; font-size:12px; margin-top:16px;'>Hệ thống được bảo vệ bản quyền · Ngô Việt Cường</div>", unsafe_allow_html=True)
     
     st.stop()
