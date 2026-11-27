@@ -16,6 +16,7 @@ from scipy.stats import linregress, norm
 
 import pk_core as pk
 import data_io
+from monolix_library import MONOLIX_LIBRARY
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
 if not os.path.exists(LOGO_PATH):
@@ -80,41 +81,66 @@ st.markdown("""
     
     /* Monolix Model Library Styles */
     .lib-header-col {
-        padding: 6px 10px;
+        padding: 6px 6px;
         font-weight: 700;
         color: white;
-        font-size: 13px;
+        font-size: 11px;
         border-radius: 4px 4px 0 0;
         text-align: center;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
         letter-spacing: 0.5px;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .col-admin { background-color: #0097a7; }
     .col-delay { background-color: #1976d2; }
+    .col-absorp { background-color: #3f51b5; }
     .col-distrib { background-color: #5c6bc0; }
     .col-elim { background-color: #7b1fa2; }
     .col-param { background-color: #c2185b; }
     .param-pill {
         display: inline-block;
-        padding: 2px 8px;
+        padding: 2px 7px;
         border-radius: 4px;
-        font-weight: bold;
-        font-size: 12px;
+        font-weight: 700;
+        font-size: 11px;
         color: white;
         margin-right: 4px;
+        margin-bottom: 3px;
+        font-family: 'SF Mono', Consolas, Monaco, monospace;
     }
     .pill-v { background-color: #5c6bc0; }
     .pill-cl { background-color: #c2185b; }
     .pill-ka { background-color: #0097a7; }
     .pill-q { background-color: #f57c00; }
+    .pill-vm { background-color: #8e24aa; }
+    .pill-km { background-color: #ab47bc; }
+    .pill-k { background-color: #ef6c00; }
+    .pill-tlag { background-color: #0288d1; }
+    .pill-pd { background-color: #2e7d32; }
+    .pill-hybrid { background-color: #37474f; }
     .pill-other { background-color: #455a64; }
     .model-id-title {
         font-family: 'SF Mono', Consolas, Monaco, monospace;
-        font-size: 15px;
+        font-size: 14.5px;
         font-weight: 700;
         color: #0f172a;
         display: inline-block;
-        margin-left: 8px;
+        margin-left: 6px;
+    }
+    .model-card-row {
+        padding: 8px 12px;
+        border-radius: 6px;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 8px;
+        transition: all 0.15s ease-in-out;
+    }
+    .model-card-row:hover {
+        border-color: #0097a7;
+        box-shadow: 0 2px 8px rgba(0, 151, 167, 0.08);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -122,151 +148,137 @@ st.markdown("""
 T_GRID = np.array([0.25, 0.5, 1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 36, 48, 72])
 WT_EFFECT_DEFAULT = {"CL": 0.75, "Q": 0.75, "Vmax": 0.75, "V": 1.0, "V1": 1.0, "V2": 1.0}
 
-MONOLIX_PK_LIBRARY = [
-    {
-        "id": "bolus_1cpt_VCl",
-        "category": "PK",
-        "admin": "bolus",
-        "delay": "no delay",
-        "distrib": "1 compartment",
-        "elim": "linear",
-        "param": "clearance",
-        "params": ["V", "CL"],
-        "units": ["L", "L/h"],
-        "defaults": [20.0, 5.0],
-        "ranges": [(5.0, 100.0), (1.0, 30.0)],
-        "internal_model": "1-Compartment IV infusion (multi-dose)",
-        "tinf_override": 0.01,
-        "error_override": "combined1",
-        "desc": "1-ngăn tiêm tĩnh mạch trực tiếp (IV Bolus tức thời) với đào thải tuyến tính bậc 1, tham số hóa qua Thể tích phân bố (V) và Độ thanh thải (CL). Hỗ trợ phác đồ đơn liều và đa liều.",
-        "ode": r"\frac{dC}{dt} = -\frac{CL}{V} \cdot C, \quad C(0) = \frac{\text{Dose}}{V}",
-        "solution": r"C(t) = \sum_{k} \frac{\text{Dose}_k}{V} \cdot e^{-\frac{CL}{V} (t - t_k)}"
-    },
-    {
-        "id": "infusion_1cpt_VCl",
-        "category": "PK",
-        "admin": "infusion",
-        "delay": "no delay",
-        "distrib": "1 compartment",
-        "elim": "linear",
-        "param": "clearance",
-        "params": ["CL", "V"],
-        "units": ["L/h", "L"],
-        "defaults": [5.0, 40.0],
-        "ranges": [(0.5, 30.0), (5.0, 150.0)],
-        "internal_model": "1-Compartment IV infusion (multi-dose)",
-        "tinf_override": 1.0,
-        "error_override": "combined",
-        "desc": "1-ngăn truyền tĩnh mạch (IV Infusion với tốc độ không đổi R_inf = Dose/tinf) và đào thải tuyến tính bậc 1, tham số hóa qua Độ thanh thải (CL) và Thể tích (V).",
-        "ode": r"\frac{dC}{dt} = \frac{R_{inf}}{V} - \frac{CL}{V} \cdot C",
-        "solution": r"0 \le t \le t_{inf}: C(t) = \frac{\text{Dose}}{t_{inf} \cdot CL}\left(1 - e^{-\frac{CL}{V} t}\right); \quad t > t_{inf}: C(t) = C(t_{inf}) e^{-\frac{CL}{V} (t - t_{inf})}"
-    },
-    {
-        "id": "oral1_1cpt_kaVCl",
-        "category": "PK",
-        "admin": "oral/extravascular",
-        "delay": "no delay",
-        "distrib": "1 compartment",
-        "elim": "linear",
-        "param": "clearance",
-        "params": ["ka", "V", "CL"],
-        "units": ["1/h", "L", "L/h"],
-        "defaults": [1.2, 20.0, 5.0],
-        "ranges": [(0.1, 5.0), (5.0, 100.0), (1.0, 30.0)],
-        "internal_model": "1-Compartment (Oral)",
-        "tinf_override": None,
-        "error_override": "combined",
-        "desc": "1-ngăn đường uống / ngoài mạch (Oral) với hấp thu bậc 1 (ka), thể tích phân bố (V) và độ thanh thải (CL).",
-        "ode": r"\frac{dA_d}{dt} = -k_a A_d, \quad \frac{dC}{dt} = \frac{k_a A_d}{V} - \frac{CL}{V} C",
-        "solution": r"C(t) = \frac{\text{Dose} \cdot k_a}{V (k_a - k)} \left(e^{-k t} - e^{-k_a t}\right)"
-    },
-    {
-        "id": "oral1_2cpt_kaV1ClV2Q",
-        "category": "PK",
-        "admin": "oral/extravascular",
-        "delay": "no delay",
-        "distrib": "2 compartments",
-        "elim": "linear",
-        "param": "clearance",
-        "params": ["ka", "V1", "CL", "Q", "V2"],
-        "units": ["1/h", "L", "L/h", "L/h", "L"],
-        "defaults": [1.2, 15.0, 4.0, 8.0, 40.0],
-        "ranges": [(0.1, 5.0), (5.0, 50.0), (1.0, 20.0), (1.0, 30.0), (10.0, 150.0)],
-        "internal_model": "2-Compartment (Oral)",
-        "tinf_override": None,
-        "error_override": "combined",
-        "desc": "2-ngăn đường uống (Oral 2-cpt) gồm ngăn trung tâm (V1, CL), ngăn ngoại vi (V2) và độ thanh thải liên ngăn (Q).",
-        "ode": r"\frac{dC_1}{dt} = \frac{k_a A_d}{V_1} - \frac{CL+Q}{V_1} C_1 + \frac{Q}{V_1} C_2; \quad \frac{dC_2}{dt} = \frac{Q}{V_2} C_1 - \frac{Q}{V_2} C_2",
-        "solution": r"C(t) = \frac{\text{Dose} \cdot k_a}{V_1} \left(A e^{-\alpha t} + B e^{-\beta t} + C_c e^{-k_a t}\right)"
-    },
-    {
-        "id": "bolus_1cpt_VKmVmax",
-        "category": "PK",
-        "admin": "bolus",
-        "delay": "no delay",
-        "distrib": "1 compartment",
-        "elim": "Michaelis-Menten",
-        "param": "clearance",
-        "params": ["V", "Vmax", "Km"],
-        "units": ["L", "mg/h", "mg/L"],
-        "defaults": [20.0, 10.0, 2.0],
-        "ranges": [(5.0, 50.0), (1.0, 50.0), (0.1, 20.0)],
-        "internal_model": "Michaelis-Menten",
-        "tinf_override": None,
-        "error_override": "combined",
-        "desc": "1-ngăn IV Bolus với động học bão hòa phi tuyến Michaelis-Menten (tốc độ đào thải tối đa Vmax, hằng số Michaelis Km).",
-        "ode": r"\frac{dC}{dt} = -\frac{V_{max} \cdot C}{V \cdot (K_m + C)}",
-        "solution": r"C(t) = K_m \cdot W\left(\frac{C_0}{K_m} e^{\frac{C_0}{K_m} - \frac{V_{max}}{V \cdot K_m} t}\right)"
-    }
-]
+MONOLIX_PK_LIBRARY = [m for m in MONOLIX_LIBRARY if m["category"] == "PK"]
+
+
+def format_pills_html(params):
+    pills = []
+    for p in params:
+        p_up = p.upper()
+        if p in ['V', 'V1', 'V2', 'V3']:
+            cls = 'pill-v'
+        elif p in ['CL', 'Q', 'Q2', 'Q3', 'kel']:
+            cls = 'pill-cl'
+        elif p in ['ka', 'Tk0', 'ktr', 'Mtt']:
+            cls = 'pill-ka'
+        elif p in ['Vm', 'Km', 'Vmax']:
+            cls = 'pill-vm'
+        elif p.startswith('k') or p in ['k12', 'k21', 'k13', 'k31', 'kout', 'ke0']:
+            cls = 'pill-k'
+        elif 'lag' in p.lower():
+            cls = 'pill-tlag'
+        elif p in ['E0', 'Emax', 'EC50', 'Imax', 'IC50', 'gamma', 'Rin', 'Smax', 'SC50']:
+            cls = 'pill-pd'
+        elif p in ['alpha', 'beta', 'gamma', 'A', 'B', 'C']:
+            cls = 'pill-hybrid'
+        else:
+            cls = 'pill-other'
+        pills.append(f'<span class="param-pill {cls}">{p}</span>')
+    return "".join(pills)
+
+
+def render_model_cards(matched, tab_key="pk"):
+    """Hiển thị danh sách card mô hình Monolix kèm phân trang và tìm kiếm."""
+    c_page, c_info = st.columns([3, 4])
+    with c_page:
+        per_page_opt = st.radio(
+            "Records per page:",
+            [10, 25, 50, "Tất cả"],
+            horizontal=True,
+            index=1,
+            key=f"rpp_{tab_key}"
+        )
+    
+    total = len(matched)
+    if per_page_opt == "Tất cả":
+        page_size = max(1, total)
+    else:
+        page_size = int(per_page_opt)
+    
+    with c_info:
+        st.markdown(f"<div style='text-align: right; padding-top: 8px; color: #475569; font-size: 13px;'><b>Showing 1 to {min(page_size, total)} of {total} entries</b></div>", unsafe_allow_html=True)
+    
+    if not matched:
+        st.warning("Không có mô hình nào khớp với tổ hợp lọc hiện tại. Hãy bấm 'Xóa bộ lọc'.")
+        return
+
+    display_items = matched[:page_size]
+    for m in display_items:
+        pills_html = format_pills_html(m["params"])
+        col_info, col_btn = st.columns([5, 2])
+        with col_info:
+            st.markdown(f'{pills_html} <span class="model-id-title">{m["id"]}</span>', unsafe_allow_html=True)
+            st.caption(f"{m['desc']}")
+            with st.expander("Phương trình toán học (ODE & Closed-form)"):
+                st.latex(m["ode"])
+                st.latex(m["solution"])
+        with col_btn:
+            if st.button("✅ Chọn Model này", key=f"sel_mod_{m['id']}_{tab_key}", type="primary", use_container_width=True):
+                st.session_state["selected_lib_model"] = m["id"]
+                st.session_state["model_name_choice"] = m["internal_model"]
+                if m.get("tinf_override") is not None:
+                    st.session_state["tinf_val"] = m["tinf_override"]
+                    st.session_state["tinf_upload_input"] = float(m["tinf_override"])
+                    st.session_state["tinf_main_input"] = float(m["tinf_override"])
+                if m.get("error_override"):
+                    st.session_state["error_model_choice"] = m["error_override"]
+                st.rerun()
+        st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #e2e8f0;'/>", unsafe_allow_html=True)
 
 
 @st.dialog("📚 LOAD FROM LIBRARY — Monolix Model Library", width="large")
 def show_model_library_dialog():
     st.markdown("""
     <div style="background: #f1f5f9; padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; border-left: 4px solid #0097a7;">
-    <b>Monolix Library Browser:</b> Lọc theo đường dùng (Administration), độ trễ (Delay), số ngăn (Distribution), cơ chế thải trừ (Elimination) và hệ tham số (Parametrization) để chọn mô hình chuẩn Monolix.
+    <b>Monolix Library Browser:</b> Thư viện mô hình Dược động học & Dược lực học chuẩn Monolix (Lixoft / Simulations Plus). Bộ lọc đa chiều gồm Đường dùng (Administration), Độ trễ (Delay), Cơ chế hấp thu (Absorption), Phân bố ngăn (Distribution), Cơ chế đào thải (Elimination) và Hệ tham số (Parametrization).
     </div>
     """, unsafe_allow_html=True)
 
-    tab_pk, tab_pd, tab_pkpd, tab_other = st.tabs(["PK", "PD", "PKPD", "TMDD / Other"])
+    tab_pk, tab_pd, tab_pkpd, tab_other = st.tabs(["PK", "PD", "PKPD", "TMDD / TTE / Other"])
 
     with tab_pk:
-        # 5 Filter columns with colored headers like Monolix
-        f1, f2, f3, f4, f5 = st.columns(5)
+        # 6 Filter columns with colored headers matching Monolix GUI
+        f1, f2, f3, f4, f5, f6 = st.columns(6)
         with f1:
             st.markdown('<div class="lib-header-col col-admin">Administration</div>', unsafe_allow_html=True)
             admin_sel = st.selectbox("Administration", ["Tất cả", "bolus", "infusion", "oral/extravascular"], label_visibility="collapsed", key="lib_admin")
         with f2:
             st.markdown('<div class="lib-header-col col-delay">Delay</div>', unsafe_allow_html=True)
-            delay_sel = st.selectbox("Delay", ["Tất cả", "no delay", "lag time"], label_visibility="collapsed", key="lib_delay")
+            delay_sel = st.selectbox("Delay", ["Tất cả", "no delay", "lag time", "transit compartments"], label_visibility="collapsed", key="lib_delay")
         with f3:
-            st.markdown('<div class="lib-header-col col-distrib">Distribution</div>', unsafe_allow_html=True)
-            distrib_sel = st.selectbox("Distribution", ["Tất cả", "1 compartment", "2 compartments"], label_visibility="collapsed", key="lib_distrib")
+            st.markdown('<div class="lib-header-col col-absorp">Absorption</div>', unsafe_allow_html=True)
+            absorp_sel = st.selectbox("Absorption", ["Tất cả", "first order", "zero order", "none"], label_visibility="collapsed", key="lib_absorp")
         with f4:
+            st.markdown('<div class="lib-header-col col-distrib">Distribution</div>', unsafe_allow_html=True)
+            distrib_sel = st.selectbox("Distribution", ["Tất cả", "1 compartment", "2 compartments", "3 compartments"], label_visibility="collapsed", key="lib_distrib")
+        with f5:
             st.markdown('<div class="lib-header-col col-elim">Elimination</div>', unsafe_allow_html=True)
             elim_sel = st.selectbox("Elimination", ["Tất cả", "linear", "Michaelis-Menten"], label_visibility="collapsed", key="lib_elim")
-        with f5:
+        with f6:
             st.markdown('<div class="lib-header-col col-param">Parametrization</div>', unsafe_allow_html=True)
-            param_sel = st.selectbox("Parametrization", ["Tất cả", "clearance", "rate"], label_visibility="collapsed", key="lib_param")
+            param_sel = st.selectbox("Parametrization", ["Tất cả", "clearance", "rate", "hybrid constants"], label_visibility="collapsed", key="lib_param")
 
         c_search, c_clear = st.columns([4, 1])
-        search_q = c_search.text_input("🔍 Tìm kiếm tên mô hình...", placeholder="Ví dụ: bolus_1cpt_VCl, infusion...", label_visibility="collapsed", key="lib_search")
+        search_q = c_search.text_input("🔍 Tìm kiếm tên mô hình...", placeholder="Ví dụ: bolus_1cpt_VCl, oral1_2cpt, infusion, Tlag...", label_visibility="collapsed", key="lib_search")
         if c_clear.button("Xóa bộ lọc", key="btn_clear_filters"):
             st.session_state["lib_admin"] = "Tất cả"
             st.session_state["lib_delay"] = "Tất cả"
+            st.session_state["lib_absorp"] = "Tất cả"
             st.session_state["lib_distrib"] = "Tất cả"
             st.session_state["lib_elim"] = "Tất cả"
             st.session_state["lib_param"] = "Tất cả"
             st.session_state["lib_search"] = ""
             st.rerun()
 
-        # Match models
-        matched = []
-        for m in MONOLIX_PK_LIBRARY:
+        # Match PK models
+        matched_pk = []
+        pk_models = [m for m in MONOLIX_LIBRARY if m["category"] == "PK"]
+        for m in pk_models:
             if admin_sel != "Tất cả" and m["admin"] != admin_sel:
                 continue
             if delay_sel != "Tất cả" and m["delay"] != delay_sel:
+                continue
+            if absorp_sel != "Tất cả" and m["absorption"] != absorp_sel:
                 continue
             if distrib_sel != "Tất cả" and m["distrib"] != distrib_sel:
                 continue
@@ -276,44 +288,35 @@ def show_model_library_dialog():
                 continue
             if search_q.strip():
                 sq = search_q.strip().lower()
-                if sq not in m["id"].lower() and sq not in m["desc"].lower():
+                if sq not in m["id"].lower() and sq not in m["desc"].lower() and not any(sq == p.lower() for p in m["params"]):
                     continue
-            matched.append(m)
+            matched_pk.append(m)
 
-        st.markdown(f"**Danh sách mô hình ({len(matched)} mô hình phù hợp):**")
-
-        if not matched:
-            st.warning("Không có mô hình nào khớp với tổ hợp lọc hiện tại. Hãy bấm 'Xóa bộ lọc'.")
-        else:
-            for m in matched:
-                pills_html = "".join([f'<span class="param-pill pill-v">{p}</span>' if p in ['V', 'V1', 'V2'] else f'<span class="param-pill pill-cl">{p}</span>' if p in ['CL', 'Q'] else f'<span class="param-pill pill-ka">{p}</span>' if p == 'ka' else f'<span class="param-pill pill-other">{p}</span>' for p in m["params"]])
-                
-                col_info, col_btn = st.columns([5, 2])
-                with col_info:
-                    st.markdown(f'{pills_html} <span class="model-id-title">{m["id"]}</span>', unsafe_allow_html=True)
-                    st.caption(f"{m['desc']}")
-                    with st.expander("Phương trình toán học (ODE & Closed-form)"):
-                        st.latex(m["ode"])
-                        st.latex(m["solution"])
-                with col_btn:
-                    if st.button("✅ Chọn Model này", key=f"sel_mod_{m['id']}", type="primary", use_container_width=True):
-                        st.session_state["selected_lib_model"] = m["id"]
-                        st.session_state["model_name_choice"] = m["internal_model"]
-                        if m["tinf_override"] is not None:
-                            st.session_state["tinf_val"] = m["tinf_override"]
-                            st.session_state["tinf_upload_input"] = float(m["tinf_override"])
-                            st.session_state["tinf_main_input"] = float(m["tinf_override"])
-                        if m.get("error_override"):
-                            st.session_state["error_model_choice"] = m["error_override"]
-                        st.rerun()
-                st.markdown("<hr style='margin: 6px 0; border: none; border-top: 1px solid #e2e8f0;'/>", unsafe_allow_html=True)
+        render_model_cards(matched_pk, "pk")
 
     with tab_pd:
-        st.info("Các mô hình Dược lực học PD (Emax, Sigmoid Emax, Turnover) sẽ được mở rộng trong module tiếp theo.")
+        pd_search = st.text_input("🔍 Tìm kiếm mô hình Dược lực học (PD)...", placeholder="Ví dụ: emax, sigmoidal, turnover, inhibitory...", label_visibility="collapsed", key="pd_search")
+        matched_pd = [
+            m for m in MONOLIX_LIBRARY 
+            if m["category"] == "PD" and (not pd_search.strip() or pd_search.strip().lower() in m["id"].lower() or pd_search.strip().lower() in m["desc"].lower())
+        ]
+        render_model_cards(matched_pd, "pd")
+
     with tab_pkpd:
-        st.info("Các mô hình PK/PD phối hợp (Direct effect, Effect compartment) đang được tích hợp.")
+        pkpd_search = st.text_input("🔍 Tìm kiếm mô hình phối hợp PK/PD...", placeholder="Ví dụ: effect_cpt, direct...", label_visibility="collapsed", key="pkpd_search")
+        matched_pkpd = [
+            m for m in MONOLIX_LIBRARY 
+            if m["category"] == "PKPD" and (not pkpd_search.strip() or pkpd_search.strip().lower() in m["id"].lower() or pkpd_search.strip().lower() in m["desc"].lower())
+        ]
+        render_model_cards(matched_pkpd, "pkpd")
+
     with tab_other:
-        st.info("Các mô hình TMDD (Target-Mediated Drug Disposition) và thời gian sống sót TTE.")
+        other_search = st.text_input("🔍 Tìm kiếm mô hình TMDD / TTE...", placeholder="Ví dụ: tmdd, weibull, hazard...", label_visibility="collapsed", key="other_search")
+        matched_other = [
+            m for m in MONOLIX_LIBRARY 
+            if m["category"] in ["TMDD", "TTE"] and (not other_search.strip() or other_search.strip().lower() in m["id"].lower() or other_search.strip().lower() in m["desc"].lower())
+        ]
+        render_model_cards(matched_other, "other")
 
 
 def header(text):
