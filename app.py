@@ -885,13 +885,14 @@ def check_authentication():
     c1, c2, c3 = st.columns([1, 1.8, 1])
     with c2:
         st.markdown("<br><br>", unsafe_allow_html=True)
+        logo_display = (
+            f'<img src="data:image/png;base64,{LOGO_B64}" style="width: 88px; height: 88px; object-fit: contain; filter: drop-shadow(0 6px 16px rgba(13, 51, 104, 0.15)); margin-bottom: 10px;">'
+        ) if LOGO_B64 else '<div style="display: inline-block; padding: 14px; background: #e0f2fe; border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(13, 51, 104, 0.08);"><span style="font-size: 42px;">🔐</span></div>'
         st.markdown(f"""
         <div style="text-align: center; margin-bottom: 24px;">
-            <div style="display: inline-block; padding: 14px; background: #e0f2fe; border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(13, 51, 104, 0.08);">
-                <span style="font-size: 42px;">🔐</span>
-            </div>
-            <h2 style="color: #0d3368; font-weight: 800; margin-bottom: 4px; letter-spacing: -0.5px;">SimDx — NLME Platform</h2>
-            <p style="color: #64748b; font-size: 14px; margin-top: 0;">Nonlinear Mixed-Effects Modeling · Cổng bảo mật</p>
+            {logo_display}
+            <h2 style="color: #0d3368; font-weight: 800; margin-bottom: 4px; letter-spacing: -0.5px;">Spass</h2>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0;">inb Bảnh để có pass</p>
         </div>
         """, unsafe_allow_html=True)
         
