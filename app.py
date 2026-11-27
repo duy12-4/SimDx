@@ -896,9 +896,9 @@ def check_authentication():
         """, unsafe_allow_html=True)
         
         with st.form("login_form", clear_on_submit=False):
-            st.markdown("##### Nhập mật khẩu truy cập:")
-            pwd = st.text_input("Mật khẩu", type="password", placeholder="Nhập mật khẩu được cấp...", label_visibility="collapsed")
-            submit = st.form_submit_button("Đăng nhập vào hệ thống", type="primary", use_container_width=True)
+            st.markdown("##### bát's là gì ?")
+            pwd = st.text_input("Mật khẩu", type="password", placeholder="Hỏi NVC đi", label_visibility="collapsed")
+            submit = st.form_submit_button("Vào hệ thống của bảnh", type="primary", use_container_width=True)
             
             if submit:
                 valid_passwords = [MASTER_PASSWORD]
@@ -910,10 +910,10 @@ def check_authentication():
                 
                 if pwd in valid_passwords:
                     st.session_state["authenticated"] = True
-                    st.success("✅ Xác thực thành công! Đang chuyển hướng...")
+                    st.success("Ngô Việt Cường đã chốt bạn ")
                     st.rerun()
                 else:
-                    st.error("❌ Mật khẩu không chính xác. Vui lòng thử lại!")
+                    st.error("Á à :) xin phép chưa ????")
         
         st.caption("<div style='text-align:center; color:#94a3b8; font-size:12px; margin-top:16px;'>Hệ thống được bảo vệ bản quyền · Ngô Việt Cường</div>", unsafe_allow_html=True)
     
