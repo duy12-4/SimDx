@@ -981,7 +981,7 @@ def check_authentication():
         with st.form("login_form", clear_on_submit=False):
             st.markdown("##### bát's là gì ?" if not is_failed else "##### Nhập lại mật khẩu cho đúng:")
             pwd = st.text_input("Mật khẩu", type="password", placeholder="Hỏi NVC đi", label_visibility="collapsed")
-            submit = st.form_submit_button("Vào hệ thống của bảnh" if not is_failed else "Thử lại lần nữa", type="primary", use_container_width=True)
+            submit = st.form_submit_button("Vào hệ thống của bảnh" if not is_failed else "Cho cơ hội cuối", type="primary", use_container_width=True)
             
             if submit:
                 valid_passwords = [MASTER_PASSWORD]
@@ -1001,7 +1001,7 @@ def check_authentication():
                     st.rerun()
         
         if is_failed:
-            if st.button("⬅️ Quay lại", use_container_width=True):
+            if st.button("Đi về đi", use_container_width=True):
                 st.session_state["login_failed"] = False
                 st.rerun()
 
