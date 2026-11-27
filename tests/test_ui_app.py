@@ -28,7 +28,7 @@ class TestSimDxUI(unittest.TestCase):
         pwd_inputs = [w for w in at.text_input]
         self.assertTrue(len(pwd_inputs) > 0)
         pwd_inputs[0].input("sai_mat_khau")
-        submit_btn = [b for b in at.button if "Đăng nhập" in (b.label or "") or "bảnh" in (b.label or "") or "Thử lại" in (b.label or "")]
+        submit_btn = [b for b in at.button if any(k in (b.label or "") for k in ["Đăng nhập", "bảnh", "Thử lại", "cơ hội"])]
         self.assertTrue(len(submit_btn) > 0)
         submit_btn[0].click().run()
         self.assertFalse(at.session_state.get("authenticated", False))
@@ -36,7 +36,7 @@ class TestSimDxUI(unittest.TestCase):
         # Nhập đúng mật khẩu
         pwd_inputs = [w for w in at.text_input]
         pwd_inputs[0].input("ngovietcuongkhongchodung1112")
-        submit_btn = [b for b in at.button if "Đăng nhập" in (b.label or "") or "bảnh" in (b.label or "") or "Thử lại" in (b.label or "")]
+        submit_btn = [b for b in at.button if any(k in (b.label or "") for k in ["Đăng nhập", "bảnh", "Thử lại", "cơ hội"])]
         submit_btn[0].click().run()
         self.assertTrue(at.session_state.get("authenticated", False))
 
