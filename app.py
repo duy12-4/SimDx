@@ -1686,6 +1686,54 @@ def main():
 
             st.markdown('<div class="convergence-box"><b>Gate G4 Strictly Verified:</b> Đã kiểm tra tính hợp lệ dữ liệu. Không có bản ghi trùng lặp (ID, Time).</div>', unsafe_allow_html=True)
 
+            # ── ĐỊNH NGHĨA VAI TRÒ CỘT DỮ LIỆU (COLUMN MAPPING CHUẨN MONOLIX) ──
+            cov_types = clinical_data.get("cov_types", clinical_data.get("detected_covariates", {}))
+            if cov_types:
+                with st.expander("Định nghĩa Vai trò Cột Dữ liệu (Column Mapping — Chuẩn Monolix: Continuous / Categorical / Ignore)", expanded=True):
+                    st.caption("Tự động nhận diện mọi cột biến đồng ảnh hưởng trong file (bao gồm `GEN`, `Albumin`, `Bilirubin`, `CLCr_CG`, `TBW`...). Bạn có thể chuyển đổi qua lại giữa Biến liên tục (Continuous), Biến phân loại (Categorical) hoặc Bỏ qua (Ignore).")
+                    role_label_map = {
+                        "continuous": "Continuous Covariate",
+                        "categorical": "Categorical Covariate",
+                        "ignore": "Ignore (Bỏ qua)"
+                    }
+                    rev_role_map = {v: k for k, v in role_label_map.items()}
+                    bdf = clinical_data.get("baseline_cov")
+                    raw_df = clinical_data.get("raw_df")
+                    map_rows = []
+                    for col_name, ctype in cov_types.items():
+                        src_s = raw_df[col_name].dropna() if (raw_df is not None and col_name in raw_df.columns) else (bdf[col_name].dropna() if (bdf is not None and col_name in bdf.columns) else pd.Series([]))
+                        n_uniq = int(src_s.nunique()) if len(src_s) > 0 else 0
+                        sample_vals = ", ".join(str(x) for x in src_s.unique()[:4])
+                        map_rows.append({
+                            "Tên cột (Column)": col_name,
+                            "Số giá trị duy nhất": n_uniq,
+                            "Ví dụ giá trị": sample_vals,
+                            "Vai trò (Monolix Role)": role_label_map.get(ctype, "Continuous Covariate")
+                        })
+                    df_map = pd.DataFrame(map_rows)
+                    edited_map = st.data_editor(
+                        df_map,
+                        column_config={
+                            "Tên cột (Column)": st.column_config.TextColumn(disabled=True),
+                            "Số giá trị duy nhất": st.column_config.NumberColumn(disabled=True),
+                            "Ví dụ giá trị": st.column_config.TextColumn(disabled=True),
+                            "Vai trò (Monolix Role)": st.column_config.SelectboxColumn(
+                                options=["Continuous Covariate", "Categorical Covariate", "Ignore (Bỏ qua)"],
+                                required=True
+                            )
+                        },
+                        hide_index=True,
+                        use_container_width=True,
+                        key="data_column_mapping_editor"
+                    )
+                    new_cov_types = {}
+                    for _, mr in edited_map.iterrows():
+                        new_cov_types[mr["Tên cột (Column)"]] = rev_role_map.get(mr["Vai trò (Monolix Role)"], "continuous")
+                    if new_cov_types != cov_types:
+                        clinical_data["cov_types"] = new_cov_types
+                        st.session_state["clinical_data"] = clinical_data
+                        save_current_session()
+
             # Nút chuyển nhanh sang Bước 2
             c_go1, c_go2 = st.columns([1.5, 1])
             with c_go1:
@@ -1959,9 +2007,15 @@ output = {{Cc}}
                     sigma_add = col_err_a.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1, key="main_sigma_a")
                     sigma_prop = col_err_b.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02, key="main_sigma_b")
 
-                    st.markdown("##### Covariate lâm sàng:")
-                    cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
-                    cov_sel = st.multiselect("Hiệu ứng covariate", cov_opts, default=[], key="main_cov_select")
+                    st.markdown("##### Covariate lâm sàng & Di truyền (Dynamic):")
+                    active_covs = [c for c, ct in clinical_data.get("cov_types", clinical_data.get("detected_covariates", {})).items() if ct != "ignore"]
+                    if not active_covs:
+                        cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
+                    else:
+                        priority_covs = ["CLCr_CG", "TBW", "Sepsis", "Age", "GEN", "Albumin", "Bilirubin", "Sex"]
+                        ordered_covs = [c for c in priority_covs if c in active_covs] + [c for c in active_covs if c not in priority_covs]
+                        cov_opts = [f"{p}~{c}" for p in names for c in ordered_covs]
+                    cov_sel = st.multiselect("Hiệu ứng covariate (tự động từ Column Mapping)", cov_opts, default=[], key="main_cov_select")
                     cov_mode = st.radio("Chế độ Covariate", ["time-varying", "baseline"], horizontal=True, key="main_cov_mode")
 
     elif current_tab == "3. Results & Population parameters":
@@ -2104,6 +2158,38 @@ output = {{Cc}}
             fig_cov = covariate_correlation_figure(res, clinical_data)
             if fig_cov is not None:
                 st.plotly_chart(fig_cov, width="stretch")
+
+            # Khám phá tương quan động cho mọi biến (bao gồm GEN, Albumin, Bilirubin...)
+            dyn_cov_types = {k: v for k, v in clinical_data.get("cov_types", clinical_data.get("detected_covariates", {})).items() if v != "ignore"}
+            if dyn_cov_types:
+                with st.expander("Khám phá Tương quan Động cho Bất kỳ Covariate nào (GEN, Albumin, Bilirubin...)", expanded=False):
+                    c_dc1, c_dc2 = st.columns(2)
+                    sel_p_eta = c_dc1.selectbox("Tham số PK (η)", res["names"], key="dyn_cov_param")
+                    sel_cov_col = c_dc2.selectbox("Biến đồng ảnh hưởng (Covariate)", list(dyn_cov_types.keys()), key="dyn_cov_col")
+                    p_idx = res["names"].index(sel_p_eta)
+                    etas_col = res["phi_hat"][:, p_idx] - pk.pop_mean_phi(res)[:, p_idx]
+                    bdf = clinical_data["baseline_cov"]
+                    col_key = sel_cov_col if sel_cov_col in bdf.columns else f"{sel_cov_col}_base"
+                    if col_key in bdf.columns:
+                        cov_vals = bdf[col_key]
+                        fig_dc = go.Figure()
+                        if dyn_cov_types[sel_cov_col] == "continuous":
+                            xv = pd.to_numeric(cov_vals, errors="coerce")
+                            valid = xv.notna() & np.isfinite(etas_col)
+                            fig_dc.add_trace(go.Scatter(x=xv[valid], y=etas_col[valid], mode="markers", marker=dict(color="#1565c0", size=7), name=f"η_{sel_p_eta}"))
+                            if valid.sum() > 2:
+                                lr = linregress(xv[valid], etas_col[valid])
+                                xt = np.linspace(xv[valid].min(), xv[valid].max(), 50)
+                                fig_dc.add_trace(go.Scatter(x=xt, y=lr.intercept + lr.slope * xt, mode="lines", line=dict(color="red", dash="dash"), name=f"Trend (p={lr.pvalue:.4f})"))
+                                st.caption(f"Hệ số tương quan Pearson **r = {lr.rvalue:.3f}**, **p-value = {lr.pvalue:.4f}**")
+                        else:
+                            cats = cov_vals.fillna("NA").astype(str).str.replace(r"\.0$", "", regex=True)
+                            for cat_lbl in sorted(cats.unique()):
+                                mask_cat = (cats == cat_lbl).values
+                                fig_dc.add_trace(go.Box(y=etas_col[mask_cat], name=str(cat_lbl), boxmean=True))
+                        fig_dc.update_layout(title=f"Tương quan η_{sel_p_eta} theo {sel_cov_col} ({dyn_cov_types[sel_cov_col]})",
+                                             xaxis_title=sel_cov_col, yaxis_title=f"η_{sel_p_eta}", height=380, template="plotly_white")
+                        st.plotly_chart(fig_dc, width="stretch")
 
             header("Bảng So sánh Mô hình Từng bước (Stepwise Covariate Modeling - SCM)")
             cov_summary_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "validation", "covariate_analysis.csv"))

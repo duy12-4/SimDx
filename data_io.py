@@ -88,13 +88,33 @@ def load_dataset(path, tinf=1.0, sheet_name=None, enforce_g4=True):
     for col in parsed_df.columns:
         parsed_df[col] = parsed_df[col].replace(".", np.nan)
 
-    # Convert numeric columns
-    numeric_cols = ["ID", "Time", "Amount", "DV", "TBW", "Height", "BMI", "IBW",
-                    "AdBW", "Dosing weight", "BSA", "Creatinine", "CLCr_CG",
-                    "eGFR_CKD_EPI", "CLCr_Je", "Sepsis", "Sex", "Age"]
-    for col in numeric_cols:
+    # Convert core numeric columns
+    core_event_cols = ["ID", "Time", "Amount", "DV", "EVID", "TINFUSION", "TINF"]
+    for col in core_event_cols:
         if col in parsed_df.columns:
             parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
+
+    # Auto-detect all extra columns as covariates (continuous vs categorical)
+    known_cat_names = {"sepsis", "sex", "gender", "gen", "genotype", "phenotype",
+                       "cyp2c19", "cyp3a5", "cyp2d6", "slco1b1", "race", "group", "arm"}
+    extra_cols = [c for c in parsed_df.columns if c not in core_event_cols]
+    detected_covs = {}
+    for col in extra_cols:
+        s_nonnull = parsed_df[col].dropna()
+        if len(s_nonnull) == 0:
+            detected_covs[col] = "ignore"
+            continue
+        num_series = pd.to_numeric(s_nonnull, errors="coerce")
+        is_all_numeric = num_series.notna().all()
+        if is_all_numeric:
+            parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
+            n_uniq = int(num_series.nunique())
+            if col.lower() in known_cat_names or n_uniq <= 5:
+                detected_covs[col] = "categorical"
+            else:
+                detected_covs[col] = "continuous"
+        else:
+            detected_covs[col] = "categorical"
 
     # Classify doses and observations
     is_dose = parsed_df["Amount"].notna() & (parsed_df["Amount"] > 0)
@@ -146,8 +166,26 @@ def load_dataset(path, tinf=1.0, sheet_name=None, enforce_g4=True):
     sub_cov_events = {}
     baseline_records = []
 
-    time_varying_cols = [c for c in ["Creatinine", "CLCr_CG", "eGFR_CKD_EPI", "CLCr_Je"] if c in parsed_df.columns]
-    baseline_cols = [c for c in ["TBW", "Height", "BMI", "IBW", "AdBW", "Dosing weight", "BSA", "Sepsis", "Sex", "Age"] if c in parsed_df.columns]
+    # Identify time-varying continuous covariates automatically (plus known renal markers)
+    known_tv = {"Creatinine", "CLCr_CG", "eGFR_CKD_EPI", "CLCr_Je"}
+    time_varying_cols = []
+    baseline_cols = []
+    for col, ctype in detected_covs.items():
+        if ctype == "ignore":
+            continue
+        if ctype == "continuous":
+            # Check if column varies over time within any subject
+            is_tv = col in known_tv
+            if not is_tv:
+                per_id_uniq = parsed_df.groupby("ID")[col].nunique(dropna=True)
+                if (per_id_uniq > 1).any():
+                    is_tv = True
+            if is_tv:
+                time_varying_cols.append(col)
+            else:
+                baseline_cols.append(col)
+        else:
+            baseline_cols.append(col)
 
     subject_obs = []
     for sid in unique_ids:
@@ -235,6 +273,8 @@ def load_dataset(path, tinf=1.0, sheet_name=None, enforce_g4=True):
         "outliers": outliers,
         "anomaly_report": anomaly_report,
         "tinf": tinf,
+        "detected_covariates": detected_covs,
+        "cov_types": dict(detected_covs),
     }
 
 

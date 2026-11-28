@@ -821,35 +821,60 @@ def prepare_data(data_source, cov_model=None, cov_mode="time-varying"):
     if isinstance(data_source, dict) and "sub_doses" in data_source:
         d = dict(data_source)
         ref_medians = {}
-        bdf = d["baseline_cov"]
-        for c in ["TBW", "Height", "BMI", "IBW", "AdBW", "Dosing weight", "BSA", "Age", "CLCr_CG", "Creatinine", "eGFR_CKD_EPI", "CLCr_Je"]:
-            if c in bdf.columns:
-                ref_medians[c] = float(np.nanmedian(bdf[c]))
-            elif f"{c}_base" in bdf.columns:
-                ref_medians[c] = float(np.nanmedian(bdf[f"{c}_base"]))
-        
         cov_dict = {}
-        for c in ["TBW", "Age"]:
-            if c in bdf.columns:
-                ref = ref_medians.get(c, 1.0)
-                cov_dict[c] = np.log(np.maximum(bdf[c].values.astype(float), 1e-4) / ref)
-        if "CLCr_CG" in bdf.columns:
-            if "CLCr_CG" not in ref_medians:
-                raise KeyError("Missing reference median for 'CLCr_CG'")
-            ref = ref_medians["CLCr_CG"]
-            cov_dict["CLCr_CG"] = np.log(np.maximum(bdf["CLCr_CG"].values.astype(float), 1e-4) / ref)
-        elif "CLCr_CG_base" in bdf.columns:
-            if "CLCr_CG" not in ref_medians:
-                raise KeyError("Missing reference median for 'CLCr_CG'")
-            ref = ref_medians["CLCr_CG"]
-            cov_dict["CLCr_CG"] = np.log(np.maximum(bdf["CLCr_CG_base"].values.astype(float), 1e-4) / ref)
-            
-        for c in ["Sepsis", "Sex"]:
-            if c in bdf.columns:
-                cov_dict[c] = bdf[c].values.astype(float)
+        cat_info = {}
+        bdf = d["baseline_cov"]
+
+        cov_types = dict(d.get("cov_types", d.get("detected_covariates", {})))
+        if not cov_types:
+            # Fallback for legacy dicts
+            for c in ["TBW", "Age", "CLCr_CG"]:
+                if c in bdf.columns or f"{c}_base" in bdf.columns:
+                    cov_types[c] = "continuous"
+            for c in ["Sepsis", "Sex"]:
+                if c in bdf.columns:
+                    cov_types[c] = "categorical"
+
+        for c, ctype in cov_types.items():
+            if ctype == "ignore":
+                continue
+            col_key = c if c in bdf.columns else (f"{c}_base" if f"{c}_base" in bdf.columns else None)
+            if col_key is None:
+                continue
+
+            if ctype == "continuous":
+                vals = pd.to_numeric(bdf[col_key], errors="coerce").values.astype(float)
+                med = float(np.nanmedian(vals)) if np.any(np.isfinite(vals)) else 1.0
+                if not np.isfinite(med) or med <= 0:
+                    med = 1.0
+                vals = np.where(np.isfinite(vals), vals, med)
+                ref_medians[c] = med
+                cov_dict[c] = np.log(np.maximum(vals, 1e-4) / med)
+            elif ctype == "categorical":
+                raw_s = bdf[col_key].fillna("NA").astype(str).str.strip()
+                # Normalize '1.0' -> '1', '0.0' -> '0'
+                raw_s = raw_s.str.replace(r"\.0$", "", regex=True)
+                cats = sorted(raw_s.unique().tolist())
+                if set(cats).issubset({"0", "1"}):
+                    cov_dict[c] = pd.to_numeric(raw_s, errors="coerce").fillna(0.0).values.astype(float)
+                    cat_info[c] = {"ref": "0", "levels": cats, "dummies": []}
+                elif len(cats) >= 2:
+                    # Most frequent category as reference (tie-break: first sorted)
+                    counts = raw_s.value_counts()
+                    ref_cat = sorted([k for k, v in counts.items() if v == counts.max()])[0]
+                    dummies = []
+                    for lvl in cats:
+                        if lvl == ref_cat:
+                            continue
+                        d_name = f"{c}_{lvl}"
+                        cov_dict[d_name] = (raw_s == lvl).values.astype(float)
+                        dummies.append((d_name, lvl))
+                    cat_info[c] = {"ref": ref_cat, "levels": cats, "dummies": dummies}
 
         d["cov"] = cov_dict
         d["ref_medians"] = ref_medians
+        d["cat_info"] = cat_info
+        d["cov_types"] = cov_types
         d["cov_mode"] = cov_mode
         d["dose"] = np.zeros((d["N"], 1))
         return d
@@ -1279,7 +1304,23 @@ def fit_model(df, model_name, init, cov_model, error_model="combined", n_iter1=2
               n_chains=1, seed=1, progress=None, n_is=1500, cov_mode="time-varying"):
     """Chạy toàn bộ: SAEM -> EBE -> -2LL -> SE -> chẩn đoán."""
     data = prepare_data(df, cov_model=cov_model, cov_mode=cov_mode)
-    res = run_saem(data, model_name, init, cov_model, error_model, n_iter1, n_iter2, n_chains, seed, progress)
+    # Expand multi-level categorical covariates into dummy columns if needed
+    cat_info = data.get("cat_info", {})
+    expanded_cov_model = {}
+    for p, covs in (cov_model or {}).items():
+        exp_list = []
+        for c in covs:
+            if c in cat_info and cat_info[c].get("dummies"):
+                for d_name, _ in cat_info[c]["dummies"]:
+                    exp_list.append(d_name)
+            elif c in data["cov"]:
+                exp_list.append(c)
+        if exp_list:
+            expanded_cov_model[p] = exp_list
+
+    res = run_saem(data, model_name, init, expanded_cov_model, error_model, n_iter1, n_iter2, n_chains, seed, progress)
+    res["cat_info"] = cat_info
+    res["cov_types"] = data.get("cov_types", {})
     res["phi_hat"] = compute_ebe(res)
     res["ll"], res["mc_se"] = loglik_is(res, n_is)
     res["ic"] = information_criteria(res, res["ll"], res["mc_se"])
