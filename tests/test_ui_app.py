@@ -15,6 +15,18 @@ class TestSimDxUI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app.py"))
+        cls.cache_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".simdx_session_cache.pkl"))
+        if os.path.exists(cls.cache_path):
+            os.remove(cls.cache_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls, "cache_path") and os.path.exists(cls.cache_path):
+            os.remove(cls.cache_path)
+
+    def setUp(self):
+        if hasattr(self, "cache_path") and os.path.exists(self.cache_path):
+            os.remove(self.cache_path)
 
     def test_login_gate(self):
         """Kiểm tra màn hình khóa và xác thực mật khẩu."""
@@ -122,6 +134,26 @@ class TestSimDxUI(unittest.TestCase):
         self.assertIn("res", at.session_state)
         # Kiểm tra tự động chuyển sang Results
         self.assertEqual(at.session_state.get("nav_step"), "3. Results & Population parameters")
+
+    def test_session_persistence_across_reloads(self):
+        """Kiểm tra tính năng lưu trữ dữ liệu & kết quả SAEM cho toàn bộ phiên làm việc."""
+        at = AppTest.from_file(self.app_path, default_timeout=180)
+        at.session_state["authenticated"] = True
+        at.run()
+        
+        # Nạp dữ liệu
+        load_btn = [b for b in at.button if "Nạp Dataset chuẩn lâm sàng" in (b.label or "")][0]
+        load_btn.click().run()
+        self.assertIsNotNone(at.session_state.get("clinical_data"))
+
+        # Khởi động một phiên AppTest mới (mô phỏng người dùng F5 hoặc mở lại trình duyệt)
+        at2 = AppTest.from_file(self.app_path, default_timeout=30)
+        at2.session_state["authenticated"] = True
+        at2.run()
+
+        # Dữ liệu từ phiên trước phải được tự động khôi phục từ cache!
+        self.assertIsNotNone(at2.session_state.get("clinical_data"), "Dữ liệu phải được tự động duy trì và khôi phục trong phiên!")
+        self.assertEqual(at2.session_state.get("clinical_data")["N"], 83)
 
 if __name__ == "__main__":
     unittest.main()

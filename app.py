@@ -7,6 +7,7 @@ import io
 import os
 import json
 import base64
+import pickle
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -1239,9 +1240,64 @@ def auto_estimate_initial_params(clinical_data, model_name):
     return estimates, cl_est, vd_est
 
 
+SESSION_CACHE_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".simdx_session_cache.pkl"))
+
+
+def save_current_session():
+    """Lưu tự động toàn bộ trạng thái phiên làm việc (Dữ liệu, Mô hình, Kết quả SAEM) ra file cache."""
+    try:
+        session_dict = {
+            "clinical_data": st.session_state.get("clinical_data"),
+            "loaded_data_name": st.session_state.get("loaded_data_name"),
+            "tinf_val": st.session_state.get("tinf_val", 1.0),
+            "model_structure_select": st.session_state.get("model_structure_select"),
+            "model_confirmed_for": st.session_state.get("model_confirmed_for"),
+            "saved_models_res": st.session_state.get("saved_models_res", {}),
+            "res": st.session_state.get("res"),
+            "nav_step": st.session_state.get("nav_step", "1. Data")
+        }
+        with open(SESSION_CACHE_FILE, "wb") as f:
+            pickle.dump(session_dict, f)
+    except Exception:
+        pass
+
+
+def load_cached_session():
+    """Khôi phục trạng thái phiên làm việc nếu chưa có trong session_state."""
+    if os.path.exists(SESSION_CACHE_FILE):
+        try:
+            with open(SESSION_CACHE_FILE, "rb") as f:
+                saved = pickle.load(f)
+            if isinstance(saved, dict) and saved.get("clinical_data") is not None:
+                for k, v in saved.items():
+                    if k not in st.session_state or st.session_state[k] is None:
+                        st.session_state[k] = v
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def reset_entire_session():
+    """Xóa sạch bộ đệm phiên làm việc để bắt đầu dự án mới hoàn toàn."""
+    if os.path.exists(SESSION_CACHE_FILE):
+        try:
+            os.remove(SESSION_CACHE_FILE)
+        except Exception:
+            pass
+    for k in ["clinical_data", "loaded_data_name", "tinf_val", "saved_models_res", "res", "vpc", "model_confirmed_for", "boot_df"]:
+        st.session_state.pop(k, None)
+    st.session_state["nav_step"] = "1. Data"
+    st.session_state["sidebar_nav_radio"] = "1. Data"
+
+
 def main():
     check_authentication()
     
+    # Khôi phục phiên làm việc đã lưu nếu chưa có dữ liệu trong session hiện tại
+    if "clinical_data" not in st.session_state or st.session_state["clinical_data"] is None:
+        load_cached_session()
+
     # ── ĐỒNG BỘ TRẠNG THÁI CHUYỂN TAB TỰ ĐỘNG ──
     if "nav_step" not in st.session_state:
         st.session_state["nav_step"] = "1. Data"
@@ -1306,8 +1362,12 @@ def main():
                 st.session_state["clinical_data"] = data_io.load_dataset(excel_path, tinf=1.0, enforce_g4=True)
                 st.session_state["loaded_data_name"] = "Dataset_chính_thức.xlsx (83 bệnh nhân chuẩn)"
                 st.session_state["tinf_val"] = 1.0
-                st.session_state.pop("res", None)
-                st.session_state.pop("vpc", None)
+                save_current_session()
+                st.rerun()
+
+        if st.session_state.get("clinical_data") is not None:
+            if st.button("Đặt lại phiên làm việc", use_container_width=True, key="btn_reset_session_sidebar", type="secondary"):
+                reset_entire_session()
                 st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -1333,8 +1393,12 @@ def main():
             target_model = lib_map[lib_id]["internal_model"]
             if target_model in model_names and st.session_state.get("model_structure_select") != target_model:
                 st.session_state["model_structure_select"] = target_model
-                st.session_state.pop("res", None)
+                saved_res = st.session_state.get("saved_models_res", {}).get(target_model)
+                st.session_state["res"] = saved_res
                 st.session_state.pop("vpc", None)
+                if saved_res is not None:
+                    st.session_state["model_confirmed_for"] = target_model
+                save_current_session()
 
     if "model_structure_select" not in st.session_state:
         st.session_state["model_structure_select"] = default_model
@@ -1380,6 +1444,15 @@ def main():
 
         st.markdown("---")
 
+        if clinical_data is not None:
+            c_act_top1, c_act_top2 = st.columns([2.2, 0.8])
+            with c_act_top1:
+                st.success(f"Dữ liệu đang lưu hoạt động trong phiên: **{st.session_state.get('loaded_data_name', 'Tập dữ liệu lâm sàng')}** ({clinical_data['N']} bệnh nhân, {clinical_data['nobs']} mẫu quan sát DV).")
+            with c_act_top2:
+                if st.button("Đặt lại / Xóa dữ liệu phiên này", type="secondary", use_container_width=True, key="btn_clear_data_step1"):
+                    reset_entire_session()
+                    st.rerun()
+
         if data_source_mode == "Tải lên file (Excel/CSV)":
             uploaded_file = st.file_uploader(
                 "Chọn file dữ liệu lâm sàng từ máy tính (Excel hoặc CSV)",
@@ -1394,6 +1467,7 @@ def main():
                     clinical_data = data_io.load_dataset(tmp_path, tinf=tinf, enforce_g4=False)
                     st.session_state["clinical_data"] = clinical_data
                     st.session_state["loaded_data_name"] = uploaded_file.name
+                    save_current_session()
                 except Exception as e:
                     st.error(f"Lỗi nạp dữ liệu: {e}")
                     clinical_data = None
@@ -1406,6 +1480,7 @@ def main():
                     clinical_data = data_io.load_dataset(excel_path, tinf=tinf, enforce_g4=True)
                     st.session_state["clinical_data"] = clinical_data
                     st.session_state["loaded_data_name"] = "Dataset_chính_thức.xlsx"
+                    save_current_session()
 
         # Hiển thị dữ liệu hoặc giao diện chờ
         if clinical_data is None:
@@ -1526,9 +1601,14 @@ def main():
                         lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
                         if cur_lib in lib_map and lib_map[cur_lib]["internal_model"] != cur:
                             st.session_state.pop("selected_lib_model", None)
-                    st.session_state.pop("res", None)
+                    saved_res = st.session_state.get("saved_models_res", {}).get(cur)
+                    st.session_state["res"] = saved_res
                     st.session_state.pop("vpc", None)
-                    st.session_state.pop("model_confirmed_for", None)
+                    if saved_res is not None or st.session_state.get("model_confirmed_for") == cur:
+                        st.session_state["model_confirmed_for"] = cur
+                    else:
+                        st.session_state.pop("model_confirmed_for", None)
+                    save_current_session()
 
                 model_name = st.selectbox(
                     "Mô hình cấu trúc",
@@ -1651,8 +1731,15 @@ output = {{Cc}}
                                            seed=int(fit_seed), progress=lambda x: bar.progress(x, text=f"SAEM {x:.0%}"),
                                            cov_mode=cov_mode_run)
                         bar.empty()
+                        res["clinical_data"] = clinical_data
+                        res["model_name"] = model_name
+                        res["loaded_data_name"] = st.session_state.get("loaded_data_name", "Clinical Dataset")
+                        if "saved_models_res" not in st.session_state:
+                            st.session_state["saved_models_res"] = {}
+                        st.session_state["saved_models_res"][model_name] = res
                         st.session_state["res"] = res
                         st.session_state.pop("vpc", None)
+                        save_current_session()
                         st.session_state["pending_nav_step"] = "3. Results & Population parameters"
                         st.rerun()
 
@@ -1710,6 +1797,25 @@ output = {{Cc}}
             st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
         else:
             show_fit(res, clinical_data)
+            st.markdown("---")
+            header("Lưu trữ & Xuất Dữ liệu Phiên làm việc (Session Export)")
+            st.success(f"Dữ liệu tập tin (**{st.session_state.get('loaded_data_name', 'Dataset')}**) và kết quả ước lượng SAEM cho mô hình **{res.get('model_name', '')}** đã được lưu trữ an toàn trong phiên làm việc.")
+            c_exp1, c_exp2, c_exp3 = st.columns(3)
+            with c_exp1:
+                df_est = estimates_table(res)
+                csv_est = df_est.to_csv(index=False).encode('utf-8')
+                st.download_button("Tải bảng Tham số Quần thể (CSV)", csv_est, "population_parameters.csv", "text/csv", use_container_width=True)
+            with c_exp2:
+                if "phi_hat" in res:
+                    d_orig = res["data"]
+                    df_ebe = pd.DataFrame(np.exp(res["phi_hat"]), columns=[f"{p}_ebe" for p in res["names"]])
+                    df_ebe.insert(0, "ID", d_orig["ids"])
+                    csv_ebe = df_ebe.to_csv(index=False).encode('utf-8')
+                    st.download_button("Tải bảng Tham số Cá thể EBE (CSV)", csv_ebe, "individual_parameters_ebe.csv", "text/csv", use_container_width=True)
+            with c_exp3:
+                if "diag" in res and "table" in res["diag"]:
+                    csv_diag = res["diag"]["table"].to_csv(index=False).encode('utf-8')
+                    st.download_button("Tải bảng Chẩn đoán Phần dư (CSV)", csv_diag, "diagnostics_residuals.csv", "text/csv", use_container_width=True)
 
     # ── MÀN HÌNH 4: DIAGNOSTIC PLOTS (GOF) ──
     elif current_tab == "4. Diagnostic Plots (GOF)":
