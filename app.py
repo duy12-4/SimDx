@@ -810,17 +810,26 @@ cat("Analysis completed.\\n")
 """
 
 
-def render_dynamic_model_equations(res, clinical_data=None, show_scm_benchmark=True):
+def render_poppk_equations_tab(res, clinical_data=None):
     if res is None:
+        st.warning("Vui lòng nạp dữ liệu và chạy SAEM ở bước 2 trước để hệ thống tính toán phương trình động.")
         return
+
+    sub_t1, sub_t2, sub_t3 = st.tabs([
+        "Hệ Phương trình Dược động học Quần thể (PopPK Equations)",
+        "Tiêu chí Thẩm định & Chỉ số Đánh giá (Evaluation Metrics)",
+        "Tổng quan Lý thuyết Dược động học Quần thể (PopPK Theory)"
+    ])
+
     names = res.get("names", ["CL", "V"])
     beta = res.get("beta", [])
     omega = res.get("omega", [])
     cov_model = res.get("cov_model", {})
     err = res.get("err", [1.0, 0.2])
     err_mod = res.get("error_model", "combined")
-    
-    # 1. Extract estimated population values
+    m_name = res.get("model_name", "1-Compartment IV infusion (multi-dose)")
+
+    # 1. Trích xuất giá trị ước lượng tham số
     theta_dict = {}
     for j, p in enumerate(names):
         theta_dict[p] = float(np.exp(beta[j][0])) if j < len(beta) and len(beta[j]) > 0 else 1.0
@@ -829,7 +838,6 @@ def render_dynamic_model_equations(res, clinical_data=None, show_scm_benchmark=T
     for j, p in enumerate(names):
         omega_dict[p] = float(omega[j]) if j < len(omega) else 0.3
 
-    # Dynamic reference medians from res['data'] or clinical_data
     ref_medians = {}
     if "data" in res and "ref_medians" in res["data"]:
         ref_medians.update(res["data"]["ref_medians"])
@@ -842,118 +850,284 @@ def render_dynamic_model_equations(res, clinical_data=None, show_scm_benchmark=T
                     ref_medians[col] = round(med, 1)
                     ref_medians[col.replace("_base", "")] = round(med, 1)
 
-    has_cov = any(len(cov_model.get(p, [])) > 0 for p in names)
-    
-    st.markdown("#### Phương trình Dược động học Quần thể (Population PK Model Equations)")
-    
-    # Section 1: Individual Parameter Model
-    st.markdown("##### 1. Mô hình Tham số Cá thể & Biến số Lâm sàng (Individual Parameter Model)")
-    if has_cov:
-        st.info("Phương trình được tính toán động 100% từ kết quả ước lượng SAEM và các hiệu ứng covariate bạn đã chọn ở thanh bên:")
-    else:
-        st.info("Phương trình Mô hình Cơ sở (Base Model) được tính toán động 100% từ kết quả ước lượng SAEM hiện tại:")
+    with sub_t1:
+        st.markdown("### Cấu trúc Mô hình Dược động học Quần thể Phân cấp Ba Tầng (3-Tier Hierarchical NLME)")
+        st.caption("Khung cấu trúc chuẩn được khởi xướng bởi Sheiner, Rosenberg và Melmon: phân tách tham số thành tầng quần thể, tầng cá thể và tầng sai số đo lường.")
 
-    for j, p in enumerate(names):
-        theta_val = theta_dict[p]
-        omega_val = omega_dict[p]
-        covs = cov_model.get(p, [])
-        cov_terms = ""
-        for k, c in enumerate(covs):
-            b_val = float(beta[j][1 + k]) if j < len(beta) and (1 + k) < len(beta[j]) else 0.0
-            clean_c = c.replace("_", r"\_")
-            if c in ["Sepsis", "Sex", "GEN", "SEX"]:
-                cov_terms += rf" \times e^{{{b_val:.3f} \cdot \text{{{clean_c}}}_i}}"
-            else:
-                ref_val = ref_medians.get(c, 70.0)
-                ref_str = f"{ref_val:.0f}" if ref_val == int(ref_val) else f"{ref_val:.1f}"
-                cov_terms += rf" \times \left(\frac{{\text{{{clean_c}}}_i}}{{{ref_str}}}\right)^{{{b_val:.3f}}}"
-        
-        clean_p = p.replace("_", r"\_")
-        eq = rf"{clean_p}_i = {theta_val:.2f}{cov_terms} \times e^{{\eta_{{i, {clean_p}}}}}, \quad \eta_{{{clean_p}}} \sim \mathcal{{N}}(0, {omega_val:.2f}^2)"
-        st.latex(eq)
+        # Tầng 1: Tầng Quần thể
+        st.markdown("#### 1. Tầng Quần thể — Thông số cố định (Fixed Effects $\\theta$) & Ma trận Hiệp phương sai $(\\Omega, \\Sigma)$")
+        st.markdown("""
+        Mô tả các thông số dược động học điển hình (*typical value* $\\theta$) của một quần thể bệnh nhân xác định, cùng ma trận phương sai biến thiên giữa các cá thể $\\Omega$ và sai số dư $\\Sigma$.
+        """)
+        est_df = estimates_table(res)
+        st.dataframe(est_df, width="stretch")
 
-    # Section 2: Structural PK Model Equation C(t)
-    st.markdown("##### 2. Mô hình Động học Nồng độ (Structural PK Model Concentration Equations $C(t)$)")
-    m_name = res.get("model_name", "")
-    
-    if "infusion" in m_name.lower():
-        cl_val = theta_dict.get("CL", 3.0)
-        v_val = theta_dict.get("V", 21.0)
-        ke_val = cl_val / v_val if v_val > 0 else 0.1
-        thalf = np.log(2) / ke_val if ke_val > 0 else 7.0
-        tinf_val = float(res.get("data", {}).get("tinf", 1.0))
-        
-        st.caption(rf"Thay thế trực tiếp các tham số quần thể vừa ước lượng: $CL_{{pop}} = {cl_val:.2f}\text{{ L/h}}$, $V_{{pop}} = {v_val:.2f}\text{{ L}} \implies k_e = \frac{{CL}}{{V}} = {ke_val:.3f}\text{{ h}}^{{-1}}$, $t_{{1/2}} = {thalf:.2f}\text{{ h}}$ (thời gian truyền $t_{{inf}} = {tinf_val:.1f}\text{{ h}}$):")
-        
-        eq_during = (
-            rf"\text{{Trong thời gian truyền }} (0 \le t \le {tinf_val:.1f}\text{{ h}}): \quad "
-            rf"C(t) = \frac{{\text{{Dose}}}}{{{tinf_val * cl_val:.2f}}} \left(1 - e^{{-{ke_val:.3f} \cdot t}}\right)"
-        )
-        st.latex(eq_during)
-        
-        coeff_washout = (1.0 - np.exp(-ke_val * tinf_val)) / (tinf_val * cl_val) if (tinf_val * cl_val) > 0 else 0.0
-        eq_post = (
-            rf"\text{{Sau khi kết thúc truyền }} (t > {tinf_val:.1f}\text{{ h}}): \quad "
-            rf"C(t) = {coeff_washout:.4f} \cdot \text{{Dose}} \cdot e^{{-{ke_val:.3f} \cdot (t - {tinf_val:.1f})}}"
-        )
-        st.latex(eq_post)
-    elif "oral" in m_name.lower():
-        cl_val = theta_dict.get("CL", 3.0)
-        v_val = theta_dict.get("V", 21.0)
-        ka_val = theta_dict.get("ka", 1.0)
-        ke_val = cl_val / v_val if v_val > 0 else 0.1
-        thalf = np.log(2) / ke_val if ke_val > 0 else 7.0
-        st.caption(rf"Thay thế tham số ước lượng: $k_a = {ka_val:.2f}\text{{ h}}^{{-1}}$, $CL = {cl_val:.2f}\text{{ L/h}}$, $V = {v_val:.2f}\text{{ L}} \implies k_e = {ke_val:.3f}\text{{ h}}^{{-1}}$, $t_{{1/2}} = {thalf:.2f}\text{{ h}}$:")
-        denom = v_val * (ka_val - ke_val) if abs(ka_val - ke_val) > 1e-5 else 1.0
-        st.latex(rf"C(t) = {ka_val/denom:.4f} \cdot \text{{Dose}} \left(e^{{-{ke_val:.3f} \cdot t}} - e^{{-{ka_val:.2f} \cdot t}}\right)")
-    elif "bolus" in m_name.lower():
-        cl_val = theta_dict.get("CL", 3.0)
-        v_val = theta_dict.get("V", 21.0)
-        ke_val = cl_val / v_val if v_val > 0 else 0.1
-        thalf = np.log(2) / ke_val if ke_val > 0 else 7.0
-        st.caption(rf"Thay thế tham số ước lượng: $CL = {cl_val:.2f}\text{{ L/h}}$, $V = {v_val:.2f}\text{{ L}} \implies k_e = {ke_val:.3f}\text{{ h}}^{{-1}}$, $t_{{1/2}} = {thalf:.2f}\text{{ h}}$:")
-        st.latex(rf"C(t) = \frac{{\text{{Dose}}}}{{{v_val:.2f}}} e^{{-{ke_val:.3f} \cdot t}}")
+        # Tầng 2: Tầng Cá thể & Yếu tố Đồng ảnh hưởng (Covariates)
+        st.markdown("#### 2. Tầng Cá thể — Độ lệch ngẫu nhiên cá thể (IIV $\\eta_i$) & Yếu tố Đồng ảnh hưởng (Covariates)")
+        st.markdown(r"""
+        Phân tách thông số dược động học cá thể ($P_i$) thành giá trị điển hình quần thể ($\theta$), yếu tố hiệu chỉnh đồng ảnh hưởng và độ lệch cá thể ($\eta_i$):
+        """)
+        st.latex(r"P_i = \theta \times \text{Covariate Effect} \times \exp(\eta_i), \quad \eta_i \sim \mathcal{N}(0, \omega^2)")
+        st.caption(r"Trong đó $\eta_i$ là biến thiên liên cá thể (IIV), giả định phân bố chuẩn với trung bình 0 và phương sai $\omega^2$. Dạng hàm mũ đảm bảo $P_i$ luôn dương và tương ứng với giả định IIV theo phân bố log-chuẩn.")
 
-    # Section 3: Residual Error Model
-    st.markdown("##### 3. Mô hình Sai số Dư / Đo lường (Residual Error Model)")
-    a_val = float(err[0]) if len(err) > 0 else 1.0
-    b_val = float(err[1]) if len(err) > 1 else 0.2
-    if err_mod == "combined":
-        st.latex(rf"y_{{ij}} = C(t_{{ij}}) + \sqrt{{{a_val:.3f}^2 + {b_val:.3f}^2 \cdot C(t_{{ij}})^2}} \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
-    elif err_mod == "proportional":
-        st.latex(rf"y_{{ij}} = C(t_{{ij}}) + {b_val:.3f} \cdot C(t_{{ij}}) \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
-    elif err_mod == "constant":
-        st.latex(rf"y_{{ij}} = C(t_{{ij}}) + {a_val:.3f} \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
-    else:
-        st.latex(rf"y_{{ij}} = C(t_{{ij}}) + ({a_val:.3f} + {b_val:.3f} \cdot C(t_{{ij}})) \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
+        st.markdown("##### Quy chuẩn đưa Biến đồng ảnh hưởng vào mô hình (Covariate Modeling):")
+        st.markdown(r"""
+        - **Biến liên tục** (Độ thanh thải creatinin $CrCl$, Cân nặng $WT$): Đưa vào theo dạng hàm lũy thừa chuẩn hóa quanh giá trị trung vị của quần thể ($CrCl_{\text{median}}$ hoặc $WT = 70\text{ kg}$):
+        """)
+        st.latex(r"CL_i = \theta_{CL} \times \left(\frac{CrCl_i}{CrCl_{\text{median}}}\right)^{\theta_1} \times \exp(\eta_{CL}), \quad \eta_{CL} \sim \mathcal{N}(0, \omega_{CL}^2)")
+        st.latex(r"V_i = \theta_V \times \left(\frac{WT_i}{70}\right)^{\theta_2} \times \exp(\eta_V), \quad \eta_V \sim \mathcal{N}(0, \omega_V^2)")
 
-    # Section 4: SCM Benchmark Reference (only when requested, e.g. in Tab 4)
-    if show_scm_benchmark:
-        is_standard_vanco = (clinical_data is not None and clinical_data.get("N", 0) == 83 and clinical_data.get("nobs", 0) == 278)
-        cov_json_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "validation", "covariate_analysis.json"))
-        if is_standard_vanco and os.path.exists(cov_json_path):
-            with st.expander("Tham khảo Benchmark: Mô hình Tối ưu Sàng lọc SCM (Vancomycin chuẩn 83 BN)", expanded=False):
-                try:
-                    with open(cov_json_path, "r") as f:
-                        scm_data = json.load(f)
-                    best_clcr = next((m for m in scm_data if "CLCr_CG" in m.get("model_name", "")), None)
-                    best_tbw = next((m for m in scm_data if "TBW" in m.get("model_name", "")), None)
-                    if best_clcr and best_tbw:
-                        st.caption("Kết quả chạy quy trình SCM chuẩn trên bộ dữ liệu Vancomycin (CL ~ CLCr_CG và V ~ TBW):")
-                        b_clcr = best_clcr["covariates"][0]["est"] if best_clcr["covariates"] else 0.84
-                        b_tbw = best_tbw["covariates"][0]["est"] if best_tbw["covariates"] else 0.58
-                        cl_pop = best_clcr["CL"]
-                        v_pop = best_tbw["V"]
-                        om_cl = best_clcr["omega_CL"]
-                        om_v = best_tbw["omega_V"]
-                        ref_clcr = ref_medians.get("CLCr_CG", 51.0)
-                        ref_tbw = ref_medians.get("TBW", 50.0)
-                        st.latex(rf"CL_i = {cl_pop:.2f} \times \left(\frac{{\text{{CLCr\_CG}}_i}}{{{ref_clcr:.0f}}}\right)^{{{b_clcr:.2f}}} \times e^{{\eta_{{i, CL}}}}, \quad \eta_{{CL}} \sim \mathcal{{N}}(0, {om_cl:.2f}^2)")
-                        st.latex(rf"V_i = {v_pop:.2f} \times \left(\frac{{\text{{TBW}}_i}}{{{ref_tbw:.0f}}}\right)^{{{b_tbw:.2f}}} \times e^{{\eta_{{i, V}}}}, \quad \eta_{{V}} \sim \mathcal{{N}}(0, {om_v:.2f}^2)")
-                except Exception:
-                    pass
-        elif clinical_data is not None and not is_standard_vanco:
-            st.caption("ℹ️ *Bạn đang làm việc với tập dữ liệu tùy chỉnh tải lên. Để thêm các biến số covariate vào mô hình vừa ước lượng bằng SAEM, hãy chọn biến số ở mục **Covariate** tại thanh bên trái (Sidebar) (ví dụ: `CL~CLCr_CG`, `V~TBW`) rồi bấm **Bắt đầu ước lượng SAEM**.*")
+        st.markdown(r"""
+        - **Biến phân loại** (Nhiễm khuẩn huyết $Sepsis$, Giới tính $Sex$): Đưa vào dưới dạng số gia tỷ lệ hoặc hàm mũ:
+        """)
+        st.latex(r"CL_i = \theta_{CL} \times (1 + \theta_3 \times \text{SEPSIS}_i) \times \exp(\eta_{CL}), \quad \text{với } \text{SEPSIS}_i \in \{0, 1\}")
+
+        st.markdown("---")
+        st.markdown("##### Phương trình Số thực tế của Mô hình vừa Ước lượng bằng SAEM:")
+        has_cov = any(len(cov_model.get(p, [])) > 0 for p in names)
+        if has_cov:
+            st.info("Phương trình được tính toán động 100% từ kết quả ước lượng SAEM và các hiệu ứng covariate lâm sàng hiện tại:")
+        else:
+            st.info("Phương trình Mô hình Cơ sở (Base Model) được tính toán động 100% từ kết quả ước lượng SAEM hiện tại:")
+
+        for j, p in enumerate(names):
+            theta_val = theta_dict[p]
+            omega_val = omega_dict[p]
+            covs = cov_model.get(p, [])
+            cov_terms = ""
+            for k, c in enumerate(covs):
+                b_val = float(beta[j][1 + k]) if j < len(beta) and (1 + k) < len(beta[j]) else 0.0
+                clean_c = c.replace("_", r"\_")
+                if c in ["Sepsis", "Sex", "GEN", "SEX"]:
+                    cov_terms += rf" \times (1 + {b_val:.3f} \cdot \text{{{clean_c}}}_i)"
+                else:
+                    ref_val = ref_medians.get(c, 70.0)
+                    ref_str = f"{ref_val:.0f}" if ref_val == int(ref_val) else f"{ref_val:.1f}"
+                    cov_terms += rf" \times \left(\frac{{\text{{{clean_c}}}_i}}{{{ref_str}}}\right)^{{{b_val:.3f}}}"
+
+            clean_p = p.replace("_", r"\_")
+            eq = rf"{clean_p}_i = {theta_val:.2f}{cov_terms} \times \exp(\eta_{{i, {clean_p}}}), \quad \eta_{{{clean_p}}} \sim \mathcal{{N}}(0, {omega_val:.2f}^2)"
+            st.latex(eq)
+
+        # Tầng 3: Tầng Quan sát & Mô hình Sai số Dư
+        st.markdown("#### 3. Tầng Quan sát — Mô hình Sai số Dư (Residual Error Model)")
+        st.markdown(r"""
+        Mối liên hệ giữa nồng độ quan sát được ($C_{\text{obs}}$) và nồng độ dự đoán theo mô hình cấu trúc ($C_{\text{pred}}$), mô tả sai số đo lường và biến thiên nội cá thể:
+        """)
+        st.latex(r"C_{\text{obs}, ij} = C_{\text{pred}, ij} \times (1 + \varepsilon_{1, ij}) + \varepsilon_{2, ij}, \quad \varepsilon_1, \varepsilon_2 \sim \mathcal{N}(0, \sigma^2)")
+        st.markdown(r"""
+        Biểu diễn tương đương theo chuẩn phần mềm **Monolix** (với tham số cộng $a$ và tham số tỷ lệ $b$):
+        """)
+        a_val = float(err[0]) if len(err) > 0 else 1.0
+        b_val = float(err[1]) if len(err) > 1 else 0.2
+        if err_mod == "combined":
+            st.latex(rf"y_{{ij}} = C(t_{{ij}}) + \sqrt{{{a_val:.3f}^2 + {b_val:.3f}^2 \cdot C(t_{{ij}})^2}} \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
+        elif err_mod == "proportional":
+            st.latex(rf"y_{{ij}} = C(t_{{ij}}) + {b_val:.3f} \cdot C(t_{{ij}}) \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
+        elif err_mod == "constant":
+            st.latex(rf"y_{{ij}} = C(t_{{ij}}) + {a_val:.3f} \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
+        else:
+            st.latex(rf"y_{{ij}} = C(t_{{ij}}) + ({a_val:.3f} + {b_val:.3f} \cdot C(t_{{ij}})) \cdot \varepsilon_{{ij}}, \quad \varepsilon_{{ij}} \sim \mathcal{{N}}(0, 1)")
+
+        # Section 4: Mô hình Động học Nồng độ C(t)
+        st.markdown("---")
+        st.markdown("#### 4. Mô hình Cấu trúc Động học Nồng độ $C(t)$ (Structural PK Model Concentration Equations)")
+        if "infusion" in m_name.lower():
+            cl_val = theta_dict.get("CL", 3.0)
+            v_val = theta_dict.get("V", 21.0)
+            ke_val = cl_val / v_val if v_val > 0 else 0.1
+            thalf = np.log(2) / ke_val if ke_val > 0 else 7.0
+            tinf_val = float(res.get("data", {}).get("tinf", 1.0))
+
+            st.markdown(f"**Mô hình 1-ngăn truyền tĩnh mạch ngắt quãng (IV Infusion)** với thời gian truyền $t_{{inf}} = {tinf_val:.1f}\\text{{ h}}$:")
+            st.caption(rf"Các tham số quần thể: $CL = {cl_val:.2f}\text{{ L/h}}$, $V = {v_val:.2f}\text{{ L}} \implies k_e = \frac{{CL}}{{V}} = {ke_val:.3f}\text{{ h}}^{{-1}}$, $t_{{1/2}} = {thalf:.2f}\text{{ h}}$:")
+
+            eq_during = (
+                rf"\text{{Trong thời gian truyền }} (0 \le t \le {tinf_val:.1f}\text{{ h}}): \quad "
+                rf"C(t) = \frac{{\text{{Dose}}}}{{{tinf_val * cl_val:.2f}}} \left(1 - e^{{-{ke_val:.3f} \cdot t}}\right)"
+            )
+            st.latex(eq_during)
+
+            coeff_washout = (1.0 - np.exp(-ke_val * tinf_val)) / (tinf_val * cl_val) if (tinf_val * cl_val) > 0 else 0.0
+            eq_post = (
+                rf"\text{{Sau khi kết thúc truyền }} (t > {tinf_val:.1f}\text{{ h}}): \quad "
+                rf"C(t) = {coeff_washout:.4f} \cdot \text{{Dose}} \cdot e^{{-{ke_val:.3f} \cdot (t - {tinf_val:.1f})}}"
+            )
+            st.latex(eq_post)
+        elif "2-compartment" in m_name.lower() or "2cpt" in m_name.lower():
+            cl_val = theta_dict.get("CL", 3.0)
+            v1_val = theta_dict.get("V1", theta_dict.get("V", 20.0))
+            q_val = theta_dict.get("Q", 2.0)
+            v2_val = theta_dict.get("V2", 30.0)
+            st.markdown("**Mô hình 2-ngăn truyền tĩnh mạch (2-Compartment IV Infusion — Chuẩn cho Amikacin / Vancomycin)**:")
+            st.caption(rf"Hệ phương trình vi phân mô tả lượng thuốc trong ngăn trung tâm $A_1(t)$ và ngăn ngoại vi $A_2(t)$:")
+            st.latex(rf"\frac{{dA_1}}{{dt}} = \text{{RateIn}} - \left(\frac{{{cl_val:.2f}}}{{{v1_val:.2f}}} + \frac{{{q_val:.2f}}}{{{v1_val:.2f}}}\right) A_1 + \frac{{{q_val:.2f}}}{{{v2_val:.2f}}} A_2")
+            st.latex(rf"\frac{{dA_2}}{{dt}} = \frac{{{q_val:.2f}}}{{{v1_val:.2f}}} A_1 - \frac{{{q_val:.2f}}}{{{v2_val:.2f}}} A_2")
+            st.latex(rf"C(t) = \frac{{A_1(t)}}{{{v1_val:.2f}}}")
+        elif "oral" in m_name.lower():
+            cl_val = theta_dict.get("CL", 3.0)
+            v_val = theta_dict.get("V", 21.0)
+            ka_val = theta_dict.get("ka", 1.0)
+            ke_val = cl_val / v_val if v_val > 0 else 0.1
+            thalf = np.log(2) / ke_val if ke_val > 0 else 7.0
+            st.caption(rf"Thay thế tham số ước lượng: $k_a = {ka_val:.2f}\text{{ h}}^{{-1}}$, $CL = {cl_val:.2f}\text{{ L/h}}$, $V = {v_val:.2f}\text{{ L}} \implies k_e = {ke_val:.3f}\text{{ h}}^{{-1}}$, $t_{{1/2}} = {thalf:.2f}\text{{ h}}$:")
+            denom = v_val * (ka_val - ke_val) if abs(ka_val - ke_val) > 1e-5 else 1.0
+            st.latex(rf"C(t) = {ka_val/denom:.4f} \cdot \text{{Dose}} \left(e^{{-{ke_val:.3f} \cdot t}} - e^{{-{ka_val:.2f} \cdot t}}\right)")
+        else:
+            cl_val = theta_dict.get("CL", 3.0)
+            v_val = theta_dict.get("V", 21.0)
+            ke_val = cl_val / v_val if v_val > 0 else 0.1
+            thalf = np.log(2) / ke_val if ke_val > 0 else 7.0
+            st.caption(rf"Thay thế tham số ước lượng: $CL = {cl_val:.2f}\text{{ L/h}}$, $V = {v_val:.2f}\text{{ L}} \implies k_e = {ke_val:.3f}\text{{ h}}^{{-1}}$, $t_{{1/2}} = {thalf:.2f}\text{{ h}}$:")
+            st.latex(rf"C(t) = \frac{{\text{{Dose}}}}{{{v_val:.2f}}} e^{{-{ke_val:.3f} \cdot t}}")
+
+    with sub_t2:
+        st.markdown("### Tiêu chí Thẩm định & Chỉ số Đánh giá Mô hình PopPK")
+        st.markdown("""
+        Theo khuyến cáo của **FDA (2022)** và **EMA (2007)**, việc đánh giá mô hình phải kết hợp giữa các chỉ số số học, tiêu chí thống kê, hiện tượng co rút và sai số dự đoán.
+        """)
+
+        # 1. Tiêu chí Thông tin & OFV
+        st.markdown("#### 1. Kiểm định Tỷ số Hợp lý & Tiêu chí Thông tin (Likelihood Ratio & Information Criteria)")
+        st.latex(r"\Delta OFV = OFV(\text{mô hình rút gọn}) - OFV(\text{mô hình đầy đủ}) \sim \chi^2(\Delta df)")
+        st.markdown(r"""
+        - Với mức ý nghĩa $\alpha = 0.05$: $\Delta OFV > 3.84$ (ứng với $\Delta df = 1$) được coi là cải thiện có ý nghĩa thống kê (tiêu chuẩn đưa biến theo hướng tiến — *forward inclusion*).
+        - Với mức ý nghĩa $\alpha = 0.01$: $\Delta OFV > 6.63$ (ứng với $\Delta df = 1$) là tiêu chuẩn loại biến theo hướng lùi (*backward elimination*).
+        """)
+        st.latex(r"AIC = -2LL + 2p, \quad BIC = -2LL + p \times \ln(N)")
+        
+        ic = res.get("ic", {})
+        c_ic1, c_ic2, c_ic3, c_ic4 = st.columns(4)
+        c_ic1.metric("OFV (−2LL)", f"{ic.get('m2ll', 0.0):.2f}")
+        c_ic2.metric("AIC", f"{ic.get('aic', 0.0):.1f}")
+        c_ic3.metric("BIC", f"{ic.get('bic', 0.0):.1f}")
+        c_ic4.metric("BICc", f"{ic.get('bicc', 0.0):.1f}")
+
+        st.markdown("---")
+        # 2. Hiện tượng co rút Shrinkage
+        st.markdown("#### 2. Đánh giá Hiện tượng Co rút (Shrinkage theo Savic & Karlsson, 2009)")
+        st.markdown("""
+        Khi số lượng hoặc thời điểm lấy mẫu trên mỗi bệnh nhân không cung cấp đủ thông tin, ước lượng Bayes hậu nghiệm của thông số cá thể có xu hướng co về giá trị điển hình của quần thể:
+        """)
+        st.latex(r"\eta\text{-shrinkage}(\%) = \left[1 - \frac{SD(\hat{\eta}_i)}{\omega}\right] \times 100")
+        st.latex(r"\varepsilon\text{-shrinkage}(\%) = \left[1 - SD(IWRES)\right] \times 100")
+
+        dg = res.get("diag", {})
+        P = len(names)
+        cols_sh = st.columns(P + 1)
+        for j, p in enumerate(names):
+            shrink_val = dg.get('eta_shrink', [0]*P)[j] if 'eta_shrink' in dg and j < len(dg['eta_shrink']) else 0.0
+            cols_sh[j].metric(f"Shrinkage η_{p}", f"{shrink_val * 100:.1f}%")
+        eps_val = dg.get('eps_shrink', 0.0)
+        cols_sh[P].metric("Shrinkage IWRES", f"{eps_val * 100:.1f}%")
+
+        st.caption("Khuyến nghị diễn giải: Shrinkage cao (> 20 – 30%) cho thấy dữ liệu ở mức cá thể cung cấp ít thông tin cho việc ước lượng tác động ngẫu nhiên; khi đó các biểu đồ chẩn đoán cá thể như DV–IPRED có thể che giấu sai lệch mô hình và cần được diễn giải thận trọng.")
+
+        st.markdown("---")
+        # 3. Sai số dự đoán thực tế MPE & RMSE
+        st.markdown("#### 3. Độ lớn Sai số Dự đoán Thực tế (Prediction Errors: MPE & RMSE)")
+        st.markdown("""
+        Đánh giá độ chệch trung bình (Mean Prediction Error — MPE) và căn bậc hai sai số bình phương trung bình (Root Mean Squared Error — RMSE) phản ánh khả năng dự đoán thực tế:
+        """)
+        st.latex(r"MPE_{\text{rel}}(\%) = \frac{100}{n} \sum_{i=1}^n \frac{C_{\text{pred}, i} - C_{\text{obs}, i}}{C_{\text{obs}, i}}, \quad RMSE = \sqrt{\frac{1}{n} \sum_{i=1}^n (C_{\text{pred}, i} - C_{\text{obs}, i})^2}")
+
+        if "diag" in res and "table" in res["diag"]:
+            tt = res["diag"]["table"]
+            obs_vals = tt["DV"].values
+            ipred_vals = tt["IPRED"].values
+            pred_vals = tt["PRED"].values
+            valid_idx = (obs_vals > 0) & (~np.isnan(obs_vals)) & (~np.isnan(ipred_vals))
+
+            if np.any(valid_idx):
+                mpe_ipred = float(np.mean((ipred_vals[valid_idx] - obs_vals[valid_idx]) / obs_vals[valid_idx]) * 100)
+                mpe_pred = float(np.mean((pred_vals[valid_idx] - obs_vals[valid_idx]) / obs_vals[valid_idx]) * 100)
+                rmse_ipred = float(np.sqrt(np.mean((ipred_vals[valid_idx] - obs_vals[valid_idx])**2)))
+                rmse_pred = float(np.sqrt(np.mean((pred_vals[valid_idx] - obs_vals[valid_idx])**2)))
+
+                c_err1, c_err2, c_err3, c_err4 = st.columns(4)
+                c_err1.metric("MPErel (IPRED Cá thể)", f"{mpe_ipred:+.2f}%")
+                c_err2.metric("RMSE (IPRED Cá thể)", f"{rmse_ipred:.2f} mg/L")
+                c_err3.metric("MPErel (PRED Quần thể)", f"{mpe_pred:+.2f}%")
+                c_err4.metric("RMSE (PRED Quần thể)", f"{rmse_pred:.2f} mg/L")
+
+    with sub_t3:
+        st.markdown("### Tổng quan về Xây dựng Mô hình Dược động học Quần thể (PopPK)")
+        
+        st.markdown("#### 1. Khái niệm, Cơ sở Toán học và Vai trò của Dược động học Quần thể")
+        st.markdown(r"""
+**Dược động học quần thể (population pharmacokinetics – PopPK)** là phương pháp mô tả các thông số dược động học điển hình (*typical value*) của một quần thể bệnh nhân xác định, đồng thời định lượng và giải thích các nguồn biến thiên của những thông số này. Khái niệm được đặt nền móng bởi Sheiner, Rosenberg và Melmon từ đầu thập niên 1970 [21], với ý tưởng cốt lõi là phân tách một thông số dược động học cá thể ($P_i$) thành giá trị điển hình quần thể ($\theta$) và độ lệch cá thể ($\eta_i$):
+""")
+        st.latex(r"P_i = \theta \times \exp(\eta_i), \quad \eta_i \sim \mathcal{N}(0, \omega^2)")
+        st.markdown(r"""
+trong đó $\eta_i$ là biến thiên liên cá thể (*interindividual variability* – IIV), giả định phân bố chuẩn với trung bình 0 và phương sai $\omega^2$ (dạng hàm mũ này đảm bảo $P_i$ luôn dương, đồng thời tương ứng với giả định IIV theo phân bố log-chuẩn – phù hợp thực tế đa số thông số dược động học). Mối liên hệ giữa nồng độ quan sát được ($C_{\text{obs}}$) và nồng độ dự đoán theo mô hình cấu trúc ($C_{\text{pred}}$) được mô tả bởi mô hình sai số dư (*residual error model*), ví dụ dạng kết hợp (*combined error model*) thường dùng nhất:
+""")
+        st.latex(r"C_{\text{obs}} = C_{\text{pred}} \times (1 + \varepsilon_1) + \varepsilon_2, \quad \varepsilon_1, \varepsilon_2 \sim \mathcal{N}(0, \sigma^2)")
+        st.markdown(r"""
+Như vậy, một mô hình PopPK có cấu trúc phân cấp ba tầng: **tầng quần thể** – các thông số cố định $\theta$ (*fixed effects*) và ma trận hiệp phương sai $\Omega, \Sigma$; **tầng cá thể** – các độ lệch ngẫu nhiên $\eta_i$ đặc trưng cho từng bệnh nhân; **tầng quan sát** – sai số dư $\varepsilon_{ij}$ gắn với từng mẫu định lượng.
+
+Cách tiếp cận này cho phép sử dụng **dữ liệu thưa (*sparse data*)**, không cân bằng (*unbalanced*), thu thập trong điều kiện thực hành lâm sàng thường quy (kể cả dữ liệu từ hoạt động TDM), thay vì đòi hỏi lịch lấy mẫu dày đặc như dược động học cổ điển trên người tình nguyện khỏe mạnh [22]. Nhờ đó, phương pháp đặc biệt phù hợp để nghiên cứu trên các quần thể khó lấy mẫu dày đặc như bệnh nhân nặng tại hồi sức tích cực, người cao tuổi hoặc phụ nữ có thai.
+
+Một mô hình PopPK được xây dựng và thẩm định thành công có **ba vai trò ứng dụng chính**:
+1. Làm cơ sở xây dựng chế độ liều khởi đầu tối ưu theo đặc điểm bệnh nhân.
+2. Làm thông tin tiên nghiệm (*prior*) cho thuật toán ước đoán Bayesian nhằm cá thể hóa liều dựa trên TDM (*model-informed precision dosing* – MIPD).
+3. Làm nền tảng cho mô phỏng đánh giá xác suất đạt đích PK/PD của các phương án liều khác nhau trước khi áp dụng lâm sàng.
+""")
+
+        st.markdown("---")
+        st.markdown("#### 2. Các Phương pháp Phân tích Dược động học Quần thể")
+        st.markdown(r"""
+Có nhiều phương pháp thống kê được sử dụng để phân tích dữ liệu PopPK, khác nhau chủ yếu ở cách xử lý cấu trúc phân cấp của dữ liệu và giả định về phân bố của các thông số trong quần thể [22], [23], [24]:
+
+- **Phương pháp gộp dữ liệu nguyên thủy (*naive pooled data*)**: gộp toàn bộ quan sát của mọi bệnh nhân như thể đến từ một cá thể duy nhất, ước lượng bằng hồi quy phi tuyến thông thường; bỏ qua hoàn toàn cấu trúc lặp lại của dữ liệu, cho ước lượng sai lệch khi dữ liệu không cân bằng giữa các cá thể.
+- **Phương pháp hai giai đoạn (*standard/global two-stage*)**: ước lượng thông số PK riêng cho từng cá thể ở giai đoạn 1 (đòi hỏi đủ số mẫu trên mỗi bệnh nhân), sau đó tổng hợp thống kê mô tả ở giai đoạn 2; không phù hợp với dữ liệu thưa.
+- **Phương pháp mô hình hóa hiệu ứng hỗn hợp phi tuyến tham số (*nonlinear mixed-effects modeling* – NLME)**: phương pháp phổ biến nhất hiện nay, ước lượng đồng thời $\theta, \Omega$ và $\Sigma$ dựa trên toàn bộ dữ liệu thô của tất cả cá thể. Các thuật toán ước lượng chính gồm:
+  - *Phương pháp bậc nhất (FO)*: tuyến tính hóa hàm dự đoán quanh $\eta = 0$, ước lượng nhanh nhưng có xu hướng đánh giá thấp IIV khi mô hình phi tuyến mạnh.
+  - *Phương pháp bậc nhất có điều kiện (FOCE)*: tuyến tính hóa quanh ước lượng Bayes thực nghiệm $\eta_i$ của từng cá thể, chính xác hơn FO.
+  - *FOCE có tương tác (FOCE-I)*: tính đến tương tác giữa IIV và sai số dư, thường được khuyến cáo mặc định.
+  - *Thuật toán mô phỏng-ước lượng kỳ vọng tối đa hóa ngẫu nhiên (SAEM)*: xử lý tối ưu các mô hình phi tuyến phức tạp hoặc dữ liệu dưới ngưỡng định lượng, là thuật toán cốt lõi trong phần mềm Monolix [25] và nền tảng của SimDx.
+- **Phương pháp phi tham số (NPML, NPAG)**: không giả định trước hình dạng phân bố của các thông số PK trong quần thể (không bắt buộc phân bố chuẩn/log-chuẩn), cho phép ước lượng phân bố đa đỉnh phản ánh sát hơn thực tế ở quần thể không đồng nhất (nền tảng phần mềm Pmetrics/BestDose).
+- **Phương pháp Bayesian đầy đủ (*full Bayesian*, thuật toán MCMC)**: kết hợp phân bố tiên nghiệm với hàm hợp lý của dữ liệu quan sát để suy ra phân bố hậu nghiệm của toàn bộ thông số mô hình.
+""")
+
+        st.markdown("---")
+        st.markdown("#### 3. Các Phần mềm trong Phân tích Dược động học Quần thể")
+        st.markdown(r"""
+- **NONMEM (*Nonlinear Mixed-Effects Modeling*)**: Sheiner, Beal và nhóm nghiên cứu tại UCSF phát triển từ cuối thập niên 1970, là phần mềm lâu đời và phổ biến nhất [27], [28], [29]. Người dùng khai báo dữ liệu, mô hình cấu trúc, mô hình thống kê trong tệp điều khiển (*control stream*), thường kết hợp với PsN, Xpose hoặc các gói R để chẩn đoán.
+- **Monolix (Lixoft, Simulations Plus)**: nền tảng mô hình tác động hỗn hợp phi tuyến tham số với thuật toán **SAEM** làm mặc định. Thuật toán này kết hợp mô phỏng tác động ngẫu nhiên với cập nhật tuần tự, loại bỏ nhu cầu tuyến tính hóa mô hình quanh thông số cá thể [30]. Cung cấp thư viện mô hình dựng sẵn và ngôn ngữ Mlxtran, cùng hệ sinh thái Datxplore và Simulx [31].
+- **Phoenix NLME (Certara)**: tích hợp trong hệ sinh thái Phoenix, hỗ trợ xây dựng mô hình PK/PD, SCM, mô phỏng và các phương pháp ước lượng FOCE, Laplace, QRPEM.
+- **Pmetrics & BestDose**: gói R hỗ trợ cả phương pháp tham số và phi tham số [32]. BestDose là công cụ hỗ trợ quyết định liều lâm sàng dựa trên Bayesian ước tính từ mô hình quần thể.
+- **Phần mềm Định liều Lâm sàng Dựa trên Mô hình (MIPD)**: các nền tảng như DoseMeRx, InsightRX, TDMx, PrecisePK kết hợp mô hình PopPK tiên nghiệm với nồng độ TDM thực tế để hỗ trợ hiệu chỉnh liều cá thể hóa.
+""")
+
+        st.markdown("---")
+        st.markdown("#### 4. Quy trình Xây dựng Mô hình Dược động học Quần thể")
+        st.markdown(r"""
+**Quy trình 5 Bước Chuẩn mực:**
+1. **Bước 1 — Chuẩn bị dữ liệu và phân tích khám phá (*EDA*)**: Làm sạch, chuẩn hóa liều dùng, thời điểm lấy mẫu, nồng độ đo được và đặc điểm bệnh nhân; khảo sát phân bố và tương quan sơ bộ.
+2. **Bước 2 — Xây dựng mô hình cấu trúc cơ bản (*Base structural model*)**: Lựa chọn số ngăn (1 ngăn, 2 ngăn) và dạng động học thải trừ. Với amikacin/vancomycin truyền ngắt quãng, phần lớn nghiên cứu quần thể mô tả tốt nhất bằng mô hình 2 ngăn thải trừ bậc 1 [33].
+3. **Bước 3 — Xây dựng mô hình thống kê (*Statistical model*)**: Mô hình hóa IIV theo dạng hàm mũ ($P_i = \theta \exp(\eta_i)$) cho $CL, V_1, Q, V_2$; mô hình hóa sai số dư theo dạng kết hợp, tỷ lệ hoặc cộng; bổ sung biến thiên giữa các đợt dùng (*IOV*) nếu thiết kế lấy mẫu cho phép.
+4. **Bước 4 — Lựa chọn phương pháp ước lượng**: Thuật toán SAEM hoặc FOCE-I.
+5. **Bước 5 — Đánh giá độ phù hợp mô hình (*Goodness-of-Fit – GOF*)**: Sử dụng bộ đồ thị chuẩn: nồng độ quan sát so với dự đoán quần thể (PRED) và dự đoán cá thể (IPRED); phần dư có trọng số điều kiện (CWRES / IWRES) theo thời gian và nồng độ dự đoán.
+
+**Phương pháp Mô hình hóa Từng bước (Stepwise Covariate Modeling – SCM):**
+- *Giai đoạn đưa biến vào theo hướng tiến (Forward inclusion)*: tiêu chuẩn $\Delta OFV > 3.84$ điểm ứng với $p < 0.05$ (1 bậc tự do).
+- *Giai đoạn loại biến theo hướng lùi (Backward elimination)*: tiêu chuẩn chặt chẽ hơn $\Delta OFV > 6.63$ điểm ứng với $p < 0.01$ để hạn chế dương tính giả [22], [34].
+- *Lưu ý đa cộng tuyến (Collinearity)*: hệ số tương quan giữa hai yếu tố đồng ảnh hưởng lớn hơn 0.5 là cảnh báo cần thận trọng khi diễn giải (ví dụ cân nặng và diện tích da, hoặc creatinin huyết thanh và tuổi).
+""")
+
+        st.markdown("---")
+        st.markdown("#### 5. Căn cứ Lựa chọn và Thẩm định Lại Mô hình Dược động học Quần thể")
+        st.markdown(r"""
+Theo hướng dẫn của **FDA (2022)** và **EMA (2007)** [35], [40], cần kết hợp đa phương pháp:
+- **Đánh giá số học**: So sánh OFV, AIC, BIC, độ chính xác ước lượng (RSE < 30% cho $\theta$, < 50% cho $\omega$), ma trận hiệp phương sai hội tụ và tính hợp lý về mặt sinh học.
+- **Đánh giá đồ thị GOF**: DV–PRED, DV–IPRED phân bố cân bằng quanh đường đồng nhất $y = x$; CWRES/IWRES phân bố ngẫu nhiên quanh 0 trong khoảng $[-2, +2]$ hoặc $[-3, +3]$.
+- **Thẩm định nội bộ bằng Bootstrap**: Tái lấy mẫu có hoàn lại theo cá thể 500 – 1.000 lần, tính trung vị và khoảng tin cậy 95% Bootstrap CI để khẳng định độ ổn định của ước lượng.
+- **Visual Predictive Check (VPC / pcVPC)**: Mô phỏng nhiều bộ dữ liệu (50 – 500 lần) từ mô hình cuối, so sánh phân vị 5%, 50%, 95% của dữ liệu quan sát với khoảng tin cậy mô phỏng tương ứng [38].
+- **Normalized Prediction Distribution Errors (NPDE)**: Kiểm tra phân bố chuẩn chuẩn hóa $\mathcal{N}(0, 1)$ của phần dư [39].
+- **Đánh giá hiện tượng co rút (Shrinkage)**: $\eta\text{-shrinkage} = [1 - SD(\hat{\eta}_i)/\omega] \times 100\%$; $\varepsilon\text{-shrinkage} = [1 - SD(IWRES)] \times 100\%$ [36].
+- **Thẩm định ngoại kiểm (*External Validation*)**: Đánh giá khả năng dự đoán trên tập dữ liệu độc lập qua các chỉ số độ chệch trung bình $MPE_{\text{rel}}(\%)$ và sai số tổng thể $RMSE$.
+""")
+
 
 
 def show_fit(res, clinical_data=None):
@@ -978,9 +1152,8 @@ def show_fit(res, clinical_data=None):
     c[2].metric("BIC", f"{ic['bic']:.1f}")
     c[3].metric("BICc", f"{ic['bicc']:.1f}")
 
-    # Phương trình mô hình dược động học vừa ước lượng
-    header("Phương trình Dược động học Quần thể vừa Ước lượng")
-    render_dynamic_model_equations(res, clinical_data, show_scm_benchmark=False)
+    # Gợi ý chuyển sang tab Phương trình Dược động học Quần thể (PopPK Model Equations)
+    st.info("Hệ phương trình Dược động học Quần thể (3-Tier NLME), các chỉ số thẩm định (OFV, AIC, BIC, Shrinkage, MPE, RMSE) và tài liệu cơ sở lý thuyết đã được chuyển sang tab chuyên biệt **'4. Model Equations (Phương trình PopPK)'** trên thanh điều hướng.")
 
     header("SAEM Convergence Traces")
     st.plotly_chart(convergence_figure(res), width="stretch", key="fig_saem_convergence")
@@ -1311,9 +1484,10 @@ def main():
         "1. Data",
         "2. SAEM Estimation & Initial Estimates",
         "3. Results & Population parameters",
-        "4. Diagnostic Plots (GOF)",
-        "5. Individual fits (EBE)",
-        "6. Covariates & Simulx"
+        "4. Model Equations (Phương trình PopPK)",
+        "5. Diagnostic Plots (GOF)",
+        "6. Individual fits (EBE)",
+        "7. Covariates & Simulx"
     ]
 
     # ── THANH BÊN (SIDEBAR): CHỈ CHỨA LOGO, BRAND, VÀ ĐIỀU HƯỚNG QUY TRÌNH WORKFLOW ──
@@ -1814,8 +1988,16 @@ output = {{Cc}}
                     csv_diag = res["diag"]["table"].to_csv(index=False).encode('utf-8')
                     st.download_button("Tải bảng Chẩn đoán Phần dư (CSV)", csv_diag, "diagnostics_residuals.csv", "text/csv", use_container_width=True)
 
-    # ── MÀN HÌNH 4: DIAGNOSTIC PLOTS (GOF) ──
-    elif current_tab == "4. Diagnostic Plots (GOF)":
+    # ── MÀN HÌNH 4: MODEL EQUATIONS (PHƯƠNG TRÌNH POPPK & CƠ SỞ LÝ THUYẾT) ──
+    elif current_tab == "4. Model Equations (Phương trình PopPK)":
+        header("Phương trình Dược động học Quần thể & Cơ sở Lý thuyết (Population PK Model Equations)")
+        if res is None:
+            st.warning("Vui lòng chạy SAEM ở bước 2 trước để hệ thống tính toán phương trình động.")
+        else:
+            render_poppk_equations_tab(res, clinical_data)
+
+    # ── MÀN HÌNH 5: DIAGNOSTIC PLOTS (GOF) ──
+    elif current_tab == "5. Diagnostic Plots (GOF)":
         header("Chẩn đoán mô hình (Goodness-of-Fit & Residuals Distribution)")
         if res is None:
             st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
@@ -1850,8 +2032,8 @@ output = {{Cc}}
             else:
                 st.markdown('<div class="convergence-box">Tuyệt vời: Không có điểm quan sát nào có |IWRES| > 3 hoặc |NPDE| > 3. Dữ liệu khớp rất tốt với mô hình.</div>', unsafe_allow_html=True)
 
-    # ── MÀN HÌNH 5: INDIVIDUAL FITS (EBE) ──
-    elif current_tab == "5. Individual fits (EBE)":
+    # ── MÀN HÌNH 6: INDIVIDUAL FITS (EBE) ──
+    elif current_tab == "6. Individual fits (EBE)":
         header("Đường cong nồng độ cá thể (Individual Fits)")
         if res is None:
             st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
@@ -1918,8 +2100,8 @@ output = {{Cc}}
             st.download_button("Tải file CSV Thông số Cá thể (individual_parameters.csv)",
                                csv_ebe, "individual_parameters.csv", "text/csv", key="btn_download_ebe_csv")
 
-    # ── MÀN HÌNH 6: COVARIATES & SIMULX ──
-    elif current_tab == "6. Covariates & Simulx":
+    # ── MÀN HÌNH 7: COVARIATES & SIMULX ──
+    elif current_tab == "7. Covariates & Simulx":
         header("Sàng lọc Covariate & Mô hình Tối ưu (Covariate Search & SCM)")
         if res is None:
             st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
@@ -1941,8 +2123,8 @@ output = {{Cc}}
                     st.dataframe(cov_df, width="stretch")
                 st.info("Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
 
-            header("Phương trình Dược động học Quần thể (Population Model Equations)")
-            render_dynamic_model_equations(res, clinical_data, show_scm_benchmark=True)
+            with st.expander("Xem Phương trình Dược động học Quần thể & Chỉ số Thẩm định", expanded=False):
+                render_poppk_equations_tab(res, clinical_data)
 
             header("Thẩm định Mô hình bằng Visual Predictive Check (VPC)")
             c1, c2, c3 = st.columns([1, 1, 1])

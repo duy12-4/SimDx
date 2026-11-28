@@ -177,14 +177,16 @@ class TestSimDxUI(unittest.TestCase):
 
         self.assertIsNotNone(at.session_state.get("res"), "SAEM fit phải có kết quả")
 
-        # Chuyển tuần tự qua các tab: Tab 4 (GOF), Tab 5 (EBE), Tab 6 (Covariates)
+        # Chuyển tuần tự qua tất cả các tab: Tab 3, Tab 4 (Equations), Tab 5 (GOF), Tab 6 (EBE), Tab 7 (Covariates)
         tabs_to_test = [
-            "4. Diagnostic Plots (GOF)",
-            "5. Individual fits (EBE)",
-            "6. Covariates & Simulx",
+            "3. Results & Population parameters",
+            "4. Model Equations (Phương trình PopPK)",
+            "5. Diagnostic Plots (GOF)",
+            "6. Individual fits (EBE)",
+            "7. Covariates & Simulx",
             "1. Data",
             "2. SAEM Estimation & Initial Estimates",
-            "5. Individual fits (EBE)"
+            "4. Model Equations (Phương trình PopPK)"
         ]
 
         for tab_name in tabs_to_test:
