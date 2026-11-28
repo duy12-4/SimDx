@@ -870,25 +870,37 @@ def render_poppk_equations_tab(res, clinical_data=None):
         st.latex(r"P_i = \theta \times \text{Covariate Effect} \times \exp(\eta_i), \quad \eta_i \sim \mathcal{N}(0, \omega^2)")
         st.caption(r"Trong đó $\eta_i$ là biến thiên liên cá thể (IIV), giả định phân bố chuẩn với trung bình 0 và phương sai $\omega^2$. Dạng hàm mũ đảm bảo $P_i$ luôn dương và tương ứng với giả định IIV theo phân bố log-chuẩn.")
 
-        st.markdown("##### Quy chuẩn đưa Biến đồng ảnh hưởng vào mô hình (Covariate Modeling):")
+        st.markdown("##### Quy chuẩn Tổng quát đưa Biến đồng ảnh hưởng vào mô hình (Generalized Covariate Modeling):")
         st.markdown(r"""
-        - **Biến liên tục** (Độ thanh thải creatinin $CrCl$, Cân nặng $WT$): Đưa vào theo dạng hàm lũy thừa chuẩn hóa quanh giá trị trung vị của quần thể ($CrCl_{\text{median}}$ hoặc $WT = 70\text{ kg}$):
+        Với một mô hình dược động học quần thể bất kỳ có $M$ biến liên tục ($X_m$: $CrCl, WT, \text{Albumin}, \text{Bilirubin}, \text{Age}\dots$) và $L$ biến phân loại / đa hình gen ($G_l$: $\text{GEN}, \text{Sepsis}, \text{Sex}\dots$), phương trình tổng quát cho mọi thông số cá thể $P_i \in \{CL_i, V_i, V_{1,i}, Q_i, V_{2,i}, k_{a,i}\dots\}$ được viết theo chuẩn **Monolix / NONMEM** như sau:
         """)
-        st.latex(r"CL_i = \theta_{CL} \times \left(\frac{CrCl_i}{CrCl_{\text{median}}}\right)^{\theta_1} \times \exp(\eta_{CL}), \quad \eta_{CL} \sim \mathcal{N}(0, \omega_{CL}^2)")
-        st.latex(r"V_i = \theta_V \times \left(\frac{WT_i}{70}\right)^{\theta_2} \times \exp(\eta_V), \quad \eta_V \sim \mathcal{N}(0, \omega_V^2)")
+        st.latex(r"P_i = \theta_P \times \prod_{m=1}^{M} \left(\frac{X_{m, i}}{X_{m, \text{ref}}}\right)^{\beta_{P, m}} \times \prod_{l=1}^{L} \exp\!\left(\sum_{k \neq k_{\text{ref}}} \beta_{P, l, k} \cdot \mathbb{I}(G_{l, i} = k)\right) \times \exp(\eta_{P, i}), \quad \eta_{P, i} \sim \mathcal{N}(0, \omega_P^2)")
 
         st.markdown(r"""
-        - **Biến phân loại** (Nhiễm khuẩn huyết $Sepsis$, Giới tính $Sex$): Đưa vào dưới dạng số gia tỷ lệ hoặc hàm mũ:
+        Trong đó:
+        - **Biến liên tục ($X_{m, i}$)** *(ví dụ: $CrCl, WT, \text{Albumin}, \text{Bilirubin}$)*: Đưa vào theo **mô hình hàm lũy thừa (power model)** chuẩn hóa quanh giá trị tham chiếu $X_{m, \text{ref}}$ (trung vị quần thể $X_{\text{median}}$ hoặc chuẩn $70\text{ kg}$).
+        - **Biến phân loại & Biến Gen ($G_{l, i}$)** *(ví dụ: $\text{GEN} \in \{\text{EM}, \text{IM}, \text{PM}\}$ hoặc $\{0, 1, 2\}$, $\text{Sepsis} \in \{0, 1\}$)*: Mã hóa bằng **biến giả chỉ thị $\mathbb{I}(G_{l, i} = k)$** dạng hàm mũ so với nhóm tham chiếu $k_{\text{ref}}$ (thường là kiểu gen bình thường / *Wild-type* hoặc *EM*). Dạng hàm mũ đảm bảo $P_i > 0$ và cho phép mỗi kiểu gen có hệ số hiệu chỉnh riêng biệt $\exp(\beta_{P, l, k})$ mà không ép tuyến tính giữa các kiểu gen.
         """)
-        st.latex(r"CL_i = \theta_{CL} \times (1 + \theta_3 \times \text{SEPSIS}_i) \times \exp(\eta_{CL}), \quad \text{với } \text{SEPSIS}_i \in \{0, 1\}")
+
+        with st.expander("Ví dụ minh họa cụ thể (CrCl, Cân nặng WT, Sepsis và Đa hình Gen CYP)", expanded=False):
+            st.latex(r"CL_i = \theta_{CL} \times \left(\frac{CrCl_i}{CrCl_{\text{median}}}\right)^{\theta_1} \times \left(\frac{\text{Albumin}_i}{\text{Albumin}_{\text{median}}}\right)^{\theta_2} \times \exp\!\big(\beta_{\text{IM}} \cdot \mathbb{I}(\text{GEN}_i = \text{IM}) + \beta_{\text{PM}} \cdot \mathbb{I}(\text{GEN}_i = \text{PM})\big) \times \exp(\eta_{CL, i})")
+            st.latex(r"V_i = \theta_V \times \left(\frac{WT_i}{70}\right)^{\theta_3} \times \exp(\beta_{\text{Sepsis}} \cdot \text{SEPSIS}_i) \times \exp(\eta_{V, i})")
 
         st.markdown("---")
         st.markdown("##### Phương trình Số thực tế của Mô hình vừa Ước lượng bằng SAEM:")
         has_cov = any(len(cov_model.get(p, [])) > 0 for p in names)
         if has_cov:
-            st.info("Phương trình được tính toán động 100% từ kết quả ước lượng SAEM và các hiệu ứng covariate lâm sàng hiện tại:")
+            st.info("Phương trình được tính toán động 100% từ kết quả ước lượng SAEM và các hiệu ứng covariate (liên tục & phân loại/gen) hiện tại:")
         else:
             st.info("Phương trình Mô hình Cơ sở (Base Model) được tính toán động 100% từ kết quả ước lượng SAEM hiện tại:")
+
+        cat_info = res.get("cat_info", {})
+        cov_types_res = res.get("cov_types", {})
+        # Map dummy name -> (parent_col, level_val)
+        dummy_lookup = {}
+        for parent_c, info in cat_info.items():
+            for d_name, lvl in info.get("dummies", []):
+                dummy_lookup[d_name] = (parent_c, lvl)
 
         for j, p in enumerate(names):
             theta_val = theta_dict[p]
@@ -897,10 +909,16 @@ def render_poppk_equations_tab(res, clinical_data=None):
             cov_terms = ""
             for k, c in enumerate(covs):
                 b_val = float(beta[j][1 + k]) if j < len(beta) and (1 + k) < len(beta[j]) else 0.0
-                clean_c = c.replace("_", r"\_")
-                if c in ["Sepsis", "Sex", "GEN", "SEX"]:
-                    cov_terms += rf" \times (1 + {b_val:.3f} \cdot \text{{{clean_c}}}_i)"
+                if c in dummy_lookup:
+                    parent_c, lvl = dummy_lookup[c]
+                    clean_pc = parent_c.replace("_", r"\_")
+                    clean_lvl = str(lvl).replace("_", r"\_")
+                    cov_terms += rf" \times \exp\!\left({b_val:+.3f} \cdot \mathbb{{I}}(\text{{{clean_pc}}}_i = \text{{{clean_lvl}}})\right)"
+                elif cov_types_res.get(c) == "categorical" or c in ["Sepsis", "Sex", "GEN", "SEX"]:
+                    clean_c = c.replace("_", r"\_")
+                    cov_terms += rf" \times \exp\!\left({b_val:+.3f} \cdot \text{{{clean_c}}}_i\right)"
                 else:
+                    clean_c = c.replace("_", r"\_")
                     ref_val = ref_medians.get(c, 70.0)
                     ref_str = f"{ref_val:.0f}" if ref_val == int(ref_val) else f"{ref_val:.1f}"
                     cov_terms += rf" \times \left(\frac{{\text{{{clean_c}}}_i}}{{{ref_str}}}\right)^{{{b_val:.3f}}}"
