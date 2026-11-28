@@ -155,5 +155,49 @@ class TestSimDxUI(unittest.TestCase):
         self.assertIsNotNone(at2.session_state.get("clinical_data"), "Dữ liệu phải được tự động duy trì và khôi phục trong phiên!")
         self.assertEqual(at2.session_state.get("clinical_data")["N"], 83)
 
+    def test_tab_navigation_preserves_data_and_res(self):
+        """Kiểm tra khi chuyển qua lại các tab (Tab 4, 5, 6, 1, 2) dữ liệu và kết quả SAEM không bị mất."""
+        at = AppTest.from_file(self.app_path, default_timeout=180)
+        at.session_state["authenticated"] = True
+        at.run()
+
+        # Nạp data
+        load_btn = [b for b in at.button if "Nạp Dataset chuẩn lâm sàng" in (b.label or "")][0]
+        load_btn.click().run()
+
+        # Sang tab 2
+        btn_goto = [b for b in at.button if "Tiếp tục: Cấu hình & Chạy SAEM" in (b.label or "")][0]
+        btn_goto.click().run()
+
+        # Xác nhận mô hình và chạy SAEM
+        btn_confirm = [b for b in at.button if "Xác nhận chọn mô hình này" in (b.label or "")][0]
+        btn_confirm.click().run()
+        run_btn = [b for b in at.button if "Bắt đầu ước lượng SAEM" in (b.label or "")][0]
+        run_btn.click().run()
+
+        self.assertIsNotNone(at.session_state.get("res"), "SAEM fit phải có kết quả")
+
+        # Chuyển tuần tự qua các tab: Tab 4 (GOF), Tab 5 (EBE), Tab 6 (Covariates)
+        tabs_to_test = [
+            "4. Diagnostic Plots (GOF)",
+            "5. Individual fits (EBE)",
+            "6. Covariates & Simulx",
+            "1. Data",
+            "2. SAEM Estimation & Initial Estimates",
+            "5. Individual fits (EBE)"
+        ]
+
+        for tab_name in tabs_to_test:
+            nav_radio = [r for r in at.sidebar.radio if "Chọn bước phân tích" in (r.label or "")][0]
+            nav_radio.set_value(tab_name).run()
+            self.assertEqual(len(at.exception), 0, f"Exception khi vào tab {tab_name}: {at.exception}")
+            self.assertIsNotNone(at.session_state.get("clinical_data"), f"clinical_data bị mất khi vào tab {tab_name}")
+            self.assertIsNotNone(at.session_state.get("res"), f"res bị mất khi vào tab {tab_name}")
+            
+            # Khẳng định không có cảnh báo 'Vui lòng chạy SAEM ở bước 2 trước'
+            warnings_text = [w.value for w in at.warning]
+            self.assertFalse(any("chạy SAEM ở bước 2 trước" in str(w) for w in warnings_text),
+                             f"Cảnh báo yêu cầu chạy lại SAEM xuất hiện tại {tab_name}: {warnings_text}")
+
 if __name__ == "__main__":
     unittest.main()

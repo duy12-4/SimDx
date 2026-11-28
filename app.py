@@ -1381,29 +1381,20 @@ def main():
     clinical_data = st.session_state.get("clinical_data", None)
     tinf = float(st.session_state.get("tinf_val", 1.0))
     current_tab = st.session_state.get("nav_step", "1. Data")
-    res = st.session_state.get("res")
+    res = st.session_state.get("res") or st.session_state.get("last_fitted_res")
+    if res is not None:
+        st.session_state["res"] = res
+        if clinical_data is None and "clinical_data" in res:
+            clinical_data = res["clinical_data"]
+            st.session_state["clinical_data"] = clinical_data
 
-    # Đồng bộ mô hình cấu trúc mặc định
+    # Đồng bộ mô hình cấu trúc mặc định mà không xóa kết quả đang có
     model_names = list(pk.MODELS.keys())
     default_model = "1-Compartment IV infusion (multi-dose)"
-    if "selected_lib_model" in st.session_state:
-        lib_id = st.session_state["selected_lib_model"]
-        lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
-        if lib_id in lib_map:
-            target_model = lib_map[lib_id]["internal_model"]
-            if target_model in model_names and st.session_state.get("model_structure_select") != target_model:
-                st.session_state["model_structure_select"] = target_model
-                saved_res = st.session_state.get("saved_models_res", {}).get(target_model)
-                st.session_state["res"] = saved_res
-                st.session_state.pop("vpc", None)
-                if saved_res is not None:
-                    st.session_state["model_confirmed_for"] = target_model
-                save_current_session()
+    if "chosen_model_name" not in st.session_state:
+        st.session_state["chosen_model_name"] = default_model
 
-    if "model_structure_select" not in st.session_state:
-        st.session_state["model_structure_select"] = default_model
-
-    model_name = st.session_state["model_structure_select"]
+    model_name = st.session_state["chosen_model_name"]
     mi = pk.MODELS[model_name]
     names = mi["params"]
     units = mi.get("units", [""] * len(names))
@@ -1596,27 +1587,33 @@ def main():
                 st.markdown("#### 1. Chọn Mô hình Cấu trúc (Structural Model Selection)")
                 def on_model_structure_change():
                     cur = st.session_state.get("model_structure_select")
-                    cur_lib = st.session_state.get("selected_lib_model")
-                    if cur_lib:
-                        lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
-                        if cur_lib in lib_map and lib_map[cur_lib]["internal_model"] != cur:
-                            st.session_state.pop("selected_lib_model", None)
-                    saved_res = st.session_state.get("saved_models_res", {}).get(cur)
-                    st.session_state["res"] = saved_res
-                    st.session_state.pop("vpc", None)
-                    if saved_res is not None or st.session_state.get("model_confirmed_for") == cur:
-                        st.session_state["model_confirmed_for"] = cur
-                    else:
-                        st.session_state.pop("model_confirmed_for", None)
-                    save_current_session()
+                    if cur:
+                        st.session_state["chosen_model_name"] = cur
+                        cur_lib = st.session_state.get("selected_lib_model")
+                        if cur_lib:
+                            lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
+                            if cur_lib in lib_map and lib_map[cur_lib]["internal_model"] != cur:
+                                st.session_state.pop("selected_lib_model", None)
+                        saved_res = st.session_state.get("saved_models_res", {}).get(cur)
+                        if saved_res is not None:
+                            st.session_state["res"] = saved_res
+                            st.session_state["model_confirmed_for"] = cur
+                        else:
+                            st.session_state.pop("model_confirmed_for", None)
+                        save_current_session()
 
+                cur_chosen = st.session_state.get("chosen_model_name", model_names[0])
+                sel_idx = model_names.index(cur_chosen) if cur_chosen in model_names else 0
+                val_arg = None if "model_structure_select" in st.session_state else sel_idx
                 model_name = st.selectbox(
                     "Mô hình cấu trúc",
                     model_names,
+                    index=val_arg,
                     key="model_structure_select",
                     on_change=on_model_structure_change,
                     help="Chọn mô hình Dược động học 1 ngăn, 2 ngăn hoặc từ thư viện Monolix"
                 )
+                st.session_state["chosen_model_name"] = model_name
                 mi = pk.MODELS[model_name]
                 names = mi["params"]
                 units = mi.get("units", [""] * len(names))
