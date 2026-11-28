@@ -36,7 +36,7 @@ if os.path.exists(CAT_PATH):
 
 st.set_page_config(
     page_title="SimDx — NLME Pharmacometrics",
-    page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else ":material/biotech:",
+    page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else None,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -143,6 +143,37 @@ st.markdown("""
         border-color: #0097a7;
         box-shadow: 0 2px 8px rgba(0, 151, 167, 0.08);
     }
+
+    /* Monolix-Style Workflow Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        background-color: #f1f5f9;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border-bottom: 2px solid #cbd5e1;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 38px;
+        padding: 0 16px;
+        background-color: transparent;
+        border-radius: 6px;
+        color: #475569;
+        font-weight: 600;
+        font-size: 13px;
+        border: none;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #0284c7 !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        box-shadow: 0 2px 4px rgba(2, 132, 199, 0.25);
+    }
+    .stButton > button {
+        border-radius: 6px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+    }
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -214,7 +245,7 @@ def render_model_cards(matched, tab_key="pk"):
                 st.latex(m["ode"])
                 st.latex(m["solution"])
         with col_btn:
-            if st.button("✅ Chọn Model này", key=f"sel_mod_{m['id']}_{tab_key}", type="primary", use_container_width=True):
+            if st.button("Chọn Model này", key=f"sel_mod_{m['id']}_{tab_key}", type="primary", use_container_width=True):
                 st.session_state["selected_lib_model"] = m["id"]
                 st.session_state["model_name_choice"] = m["internal_model"]
                 st.session_state["model_structure_select"] = m["internal_model"]
@@ -233,7 +264,7 @@ def render_model_cards(matched, tab_key="pk"):
         st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #e2e8f0;'/>", unsafe_allow_html=True)
 
 
-@st.dialog("📚 LOAD FROM LIBRARY — Monolix Model Library", width="large")
+@st.dialog("LOAD FROM LIBRARY — Monolix Model Library", width="large")
 def show_model_library_dialog():
     st.markdown("""
     <div style="background: #f1f5f9; padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; border-left: 4px solid #0097a7;">
@@ -266,7 +297,7 @@ def show_model_library_dialog():
             param_sel = st.selectbox("Parametrization", ["Tất cả", "clearance", "rate", "hybrid constants"], label_visibility="collapsed", key="lib_param")
 
         c_search, c_clear = st.columns([4, 1])
-        search_q = c_search.text_input("🔍 Tìm kiếm tên mô hình...", placeholder="Ví dụ: bolus_1cpt_VCl, oral1_2cpt, infusion, Tlag...", label_visibility="collapsed", key="lib_search")
+        search_q = c_search.text_input("Tìm kiếm tên mô hình...", placeholder="Ví dụ: bolus_1cpt_VCl, oral1_2cpt, infusion, Tlag...", label_visibility="collapsed", key="lib_search")
         if c_clear.button("Xóa bộ lọc", key="btn_clear_filters"):
             st.session_state["lib_admin"] = "Tất cả"
             st.session_state["lib_delay"] = "Tất cả"
@@ -302,7 +333,7 @@ def show_model_library_dialog():
         render_model_cards(matched_pk, "pk")
 
     with tab_pd:
-        pd_search = st.text_input("🔍 Tìm kiếm mô hình Dược lực học (PD)...", placeholder="Ví dụ: emax, sigmoidal, turnover, inhibitory...", label_visibility="collapsed", key="pd_search")
+        pd_search = st.text_input("Tìm kiếm mô hình Dược lực học (PD)...", placeholder="Ví dụ: emax, sigmoidal, turnover, inhibitory...", label_visibility="collapsed", key="pd_search")
         matched_pd = [
             m for m in MONOLIX_LIBRARY 
             if m["category"] == "PD" and (not pd_search.strip() or pd_search.strip().lower() in m["id"].lower() or pd_search.strip().lower() in m["desc"].lower())
@@ -310,7 +341,7 @@ def show_model_library_dialog():
         render_model_cards(matched_pd, "pd")
 
     with tab_pkpd:
-        pkpd_search = st.text_input("🔍 Tìm kiếm mô hình phối hợp PK/PD...", placeholder="Ví dụ: effect_cpt, direct...", label_visibility="collapsed", key="pkpd_search")
+        pkpd_search = st.text_input("Tìm kiếm mô hình phối hợp PK/PD...", placeholder="Ví dụ: effect_cpt, direct...", label_visibility="collapsed", key="pkpd_search")
         matched_pkpd = [
             m for m in MONOLIX_LIBRARY 
             if m["category"] == "PKPD" and (not pkpd_search.strip() or pkpd_search.strip().lower() in m["id"].lower() or pkpd_search.strip().lower() in m["desc"].lower())
@@ -318,7 +349,7 @@ def show_model_library_dialog():
         render_model_cards(matched_pkpd, "pkpd")
 
     with tab_other:
-        other_search = st.text_input("🔍 Tìm kiếm mô hình TMDD / TTE...", placeholder="Ví dụ: tmdd, weibull, hazard...", label_visibility="collapsed", key="other_search")
+        other_search = st.text_input("Tìm kiếm mô hình TMDD / TTE...", placeholder="Ví dụ: tmdd, weibull, hazard...", label_visibility="collapsed", key="other_search")
         matched_other = [
             m for m in MONOLIX_LIBRARY 
             if m["category"] in ["TMDD", "TTE"] and (not other_search.strip() or other_search.strip().lower() in m["id"].lower() or other_search.strip().lower() in m["desc"].lower())
@@ -782,7 +813,7 @@ def render_dynamic_model_equations(res, clinical_data=None, show_scm_benchmark=T
 
     has_cov = any(len(cov_model.get(p, [])) > 0 for p in names)
     
-    st.markdown("#### :material/functions: Phương trình Dược động học Quần thể (Population PK Model Equations)")
+    st.markdown("#### Phương trình Dược động học Quần thể (Population PK Model Equations)")
     
     # Section 1: Individual Parameter Model
     st.markdown("##### 1. Mô hình Tham số Cá thể & Biến số Lâm sàng (Individual Parameter Model)")
@@ -895,19 +926,19 @@ def render_dynamic_model_equations(res, clinical_data=None, show_scm_benchmark=T
 
 
 def show_fit(res, clinical_data=None):
-    st.info(f"🧬 **Mô hình Dược động học vừa ước lượng:** `{res.get('model_name', 'Mô hình')}`")
+    st.info(f"**Mô hình Dược động học vừa ước lượng:** `{res.get('model_name', 'Mô hình')}`")
     ic = res["ic"]
     bad = [(lab, r) for lab, ok, r in pk.convergence_report(res) if not ok]
     if bad:
         st.warning("Pha 2 chưa ổn định (trung bình nửa đầu và nửa sau lệch > 5%): "
                    + ", ".join(f"{lab} ({r:.0%})" for lab, r in bad)
-                   + ". Hãy tăng số vòng lặp hoặc số chain.", icon=":material/warning:")
+                   + ". Hãy tăng số vòng lặp hoặc số chain.")
     else:
         st.markdown('<div class="convergence-box">Các tham số ổn định ở pha smoothing (trôi < 5%)</div>',
                     unsafe_allow_html=True)
     header("Ước lượng tham số (SE/RSE: FIM tuyến tính hoá quanh EBE)")
     if any(np.isnan(v[1]) for v in res["fim"].values()):
-        st.warning("Hessian không xác định dương → không tính được SE.", icon=":material/warning:")
+        st.warning("Hessian không xác định dương → không tính được SE.")
     st.dataframe(estimates_table(res), width="stretch")
     c = st.columns(4)
     mc_se_str = f" (MC-SE: ±{ic['mc_se']:.2f})" if "mc_se" in ic and ic["mc_se"] > 0 else ""
@@ -921,14 +952,14 @@ def show_fit(res, clinical_data=None):
     render_dynamic_model_equations(res, clinical_data, show_scm_benchmark=False)
 
     header("SAEM Convergence Traces")
-    st.plotly_chart(convergence_figure(res), width="stretch")
+    st.plotly_chart(convergence_figure(res), width="stretch", key="fig_saem_convergence")
 
     # Monolix 2024 Bootstrap Module
     header("Đánh giá Độ tin cậy Tham số: Bootstrap Module (Monolix 2024)")
     st.info("Module Non-parametric Bootstrap lấy mẫu lại theo bệnh nhân để tính khoảng tin cậy 95% Bootstrap CI thực tế, giải quyết triệt để trường hợp ma trận Hessian FIM khó đảo ngược.")
     c_b1, c_b2 = st.columns([1, 1])
     n_boot = c_b1.slider("Số mẫu lặp lại (Bootstrap Replicates)", 5, 30, 10, 5, key="n_boot_slider")
-    if c_b2.button("Chạy Non-parametric Bootstrap", icon=":material/sync:", key="btn_run_bootstrap"):
+    if c_b2.button("Chạy Non-parametric Bootstrap", key="btn_run_bootstrap"):
         b_bar = st.progress(0, text="Đang chạy Bootstrap...")
         boot_records = []
         d_orig = res["data"]
@@ -1059,7 +1090,8 @@ def check_authentication():
                 text-shadow: 0 3px 12px rgba(225, 29, 72, 0.3);
                 line-height: 1.2;
             }}
-            </style>
+
+</style>
             <div style="text-align: center;">
                 <div class="cat-container">
                     <img src="data:image/jpeg;base64,{CAT_B64}" class="cat-img" alt="Cat Suspicious"/>
@@ -1070,7 +1102,7 @@ def check_authentication():
         else:
             logo_display = (
                 f'<img src="data:image/png;base64,{LOGO_B64}" style="width: 88px; height: 88px; object-fit: contain; filter: drop-shadow(0 6px 16px rgba(13, 51, 104, 0.15)); margin-bottom: 10px;">'
-            ) if LOGO_B64 else '<div style="display: inline-block; padding: 14px; background: #e0f2fe; border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(13, 51, 104, 0.08);"><span style="font-size: 42px;">🔐</span></div>'
+            ) if LOGO_B64 else '<div style="display: inline-block; padding: 14px; background: #e0f2fe; border-radius: 20px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(13, 51, 104, 0.08);"><span style="font-size: 32px; font-weight: bold; color: #0d3368;">SIMDX</span></div>'
             st.markdown(f"""
             <div style="text-align: center; margin-bottom: 24px;">
                 {logo_display}
@@ -1116,6 +1148,67 @@ def check_authentication():
     st.stop()
 
 
+def auto_estimate_initial_params(clinical_data, model_name):
+    """
+    Tự động ước lượng thông số ban đầu Vd, Cl dự kiến từ dữ liệu thực tế (Auto-estimate chuẩn Monolix).
+    Dựa trên phân tích phi khoang Non-Compartmental Analysis (NCA) của dữ liệu.
+    """
+    cl_est = 3.28
+    vd_est = 24.34
+    if clinical_data is not None:
+        try:
+            df_ind_nca, _ = compute_nca(clinical_data)
+            if df_ind_nca is not None and len(df_ind_nca) > 0:
+                cl_valid = df_ind_nca["CL_nca (L/h)"].dropna()
+                vd_valid = df_ind_nca["Vd_nca (L)"].dropna()
+                if len(cl_valid) > 0:
+                    cl_est = float(np.median(cl_valid))
+                if len(vd_valid) > 0:
+                    vd_est = float(np.median(vd_valid))
+        except Exception:
+            pass
+    
+    cl_est = max(0.5, min(cl_est, 15.0))
+    vd_est = max(5.0, min(vd_est, 60.0))
+    
+    estimates = {}
+    mi = pk.MODELS.get(model_name, {})
+    params = mi.get("params", [])
+    
+    for p in params:
+        if p in ["CL", "Cl"]:
+            estimates[p] = round(cl_est, 2)
+        elif p in ["V", "V1"]:
+            if "2-Compartment" in model_name or "3-Compartment" in model_name:
+                estimates[p] = round(vd_est * 0.7, 2)
+            else:
+                estimates[p] = round(vd_est, 2)
+        elif p == "V2":
+            estimates[p] = round(vd_est * 0.35, 2)
+        elif p == "V3":
+            estimates[p] = round(vd_est * 0.25, 2)
+        elif p in ["Q", "Q1", "Q2"]:
+            estimates[p] = round(cl_est * 0.8, 2)
+        elif p == "ka":
+            estimates[p] = 1.2
+        elif p == "k":
+            estimates[p] = round(cl_est / max(vd_est, 1e-4), 3)
+        elif p == "k12":
+            estimates[p] = 0.15
+        elif p == "k21":
+            estimates[p] = 0.2
+        elif p in ["Vmax", "Vm"]:
+            estimates[p] = 50.0
+        elif p == "Km":
+            estimates[p] = 10.0
+        elif p == "Tlag":
+            estimates[p] = 0.5
+        else:
+            estimates[p] = 1.0
+
+    return estimates, cl_est, vd_est
+
+
 def main():
     check_authentication()
     with st.sidebar:
@@ -1138,7 +1231,7 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("### :material/upload_file: Nguồn dữ liệu")
+        st.markdown("### Nguồn dữ liệu")
         data_source_opt = st.radio(
             "Chọn dữ liệu",
             ["Dataset lâm sàng (Dataset_chính_thức.xlsx)", "Tải lên file (Excel/CSV)", "Mô phỏng quần thể (Simulation)"]
@@ -1154,7 +1247,7 @@ def main():
             excel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dataset_chính_thức.xlsx"))
             if is_bolus_mode:
                 tinf = 0.01
-                st.caption(f"⚡ **Chế độ Monolix {selected_lib_id}**: tinf = 0.01 h (Bolus tức thời)")
+                st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
             else:
                 tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_main_input")
             clinical_data = data_io.load_dataset(excel_path, tinf=tinf, enforce_g4=True)
@@ -1163,7 +1256,7 @@ def main():
             uploaded_file = st.file_uploader("Tải lên file dữ liệu", type=["xlsx", "xls", "csv"])
             if is_bolus_mode:
                 tinf = 0.01
-                st.caption(f"⚡ **Chế độ Monolix {selected_lib_id}**: tinf = 0.01 h (Bolus tức thời)")
+                st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
             else:
                 tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_upload_input")
             if uploaded_file is not None:
@@ -1174,7 +1267,7 @@ def main():
                     clinical_data = data_io.load_dataset(tmp_path, tinf=tinf, enforce_g4=False)
                     default_model = "1-Compartment IV infusion (multi-dose)"
                 except Exception as e:
-                    st.error(f"❌ Lỗi nạp dữ liệu: {e}")
+                    st.error(f"Lỗi nạp dữ liệu: {e}")
                     clinical_data = None
                     default_model = "1-Compartment IV infusion (multi-dose)"
             else:
@@ -1184,8 +1277,8 @@ def main():
             default_model = "1-Compartment (Oral)"
 
         # Monolix Library Section
-        st.markdown("### :material/library_books: Thư viện mô hình Monolix")
-        if st.button("📚 LOAD FROM LIBRARY", type="primary", use_container_width=True, help="Mở thư viện mô hình Dược động học chuẩn Monolix (bolus_1cpt_VCl, infusion_1cpt_VCl, ...)"):
+        st.markdown("### Thư viện mô hình Monolix")
+        if st.button("LOAD FROM LIBRARY", type="primary", use_container_width=True, help="Mở thư viện mô hình Dược động học chuẩn Monolix (bolus_1cpt_VCl, infusion_1cpt_VCl, ...)"):
             show_model_library_dialog()
 
         if "selected_lib_model" in st.session_state:
@@ -1196,7 +1289,7 @@ def main():
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown("### :material/settings: Cấu hình mô hình")
+        st.markdown("### Cấu hình mô hình")
         model_names = list(pk.MODELS.keys())
 
         # Luôn đồng bộ mô hình khi có model được chọn từ thư viện Monolix
@@ -1231,7 +1324,7 @@ def main():
             st.session_state.pop("vpc", None)
 
         model_name = st.selectbox(
-            ":material/schema: Mô hình cấu trúc",
+            "Mô hình cấu trúc",
             model_names,
             key="model_structure_select",
             on_change=on_model_structure_change
@@ -1242,16 +1335,17 @@ def main():
         units_dict = dict(zip(names, units))
         key = lambda s: f"{model_name}_{s}"
 
-        st.markdown("### :material/bar_chart: Thông số quần thể ban đầu (θ)")
+        st.markdown("### Thông số quần thể ban đầu (θ)")
         pop_params = {}
         for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
             step = 0.05 if r[1] < 10 else 0.5
-            pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), float(d), float(step), key=key(f"pop_{p}"))
+            val_k = key(f"pop_{p}")
+            pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), float(st.session_state.get(val_k, d)), float(step), key=val_k)
 
-        st.markdown("### :material/shuffle: Biến thiên giữa các cá thể (ω)")
-        omega_dict = {p: st.slider(f"ω_{p}", 0.05, 1.0, 0.3, 0.05, key=key(f"om_{p}")) for p in names}
+        st.markdown("### Biến thiên giữa các cá thể (ω)")
+        omega_dict = {p: st.slider(f"ω_{p}", 0.05, 1.0, float(st.session_state.get(key(f"om_{p}"), 0.3)), 0.05, key=key(f"om_{p}")) for p in names}
 
-        st.markdown("### :material/show_chart: Mô hình sai số dư")
+        st.markdown("### Mô hình sai số dư")
         err_models = ["combined", "combined1", "constant", "proportional"]
         if "error_model_select" not in st.session_state:
             err_def = st.session_state.get("error_model_choice", "combined")
@@ -1263,7 +1357,7 @@ def main():
         sigma_add = c_err1.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1)
         sigma_prop = c_err2.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02)
 
-        st.markdown("### :material/biotech: Covariate")
+        st.markdown("### Covariate")
         if clinical_data is not None:
             cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
             cov_sel = st.multiselect("Hiệu ứng covariate", cov_opts, default=[])
@@ -1278,7 +1372,7 @@ def main():
             p, c = s.split("~")
             cov_model.setdefault(p, []).append(c)
 
-        st.markdown("### :material/sync: Cài đặt SAEM")
+        st.markdown("### Cài đặt SAEM")
         n_iter1 = st.slider("K1: pha exploratory (γ=1)", 50, 600, 250, 50)
         n_iter2 = st.slider("K2: pha smoothing (γ=1/k)", 25, 400, 150, 25)
         n_chains = st.slider("Số chain", 1, 3, 1)
@@ -1286,24 +1380,26 @@ def main():
 
         st.markdown("---")
         c_out1, c_out2 = st.columns([1.5, 1])
-        c_out1.caption("👤 Đã xác thực")
+        c_out1.caption("Đã xác thực")
         if c_out2.button("Đăng xuất", key="btn_logout", type="secondary", use_container_width=True):
             st.session_state["authenticated"] = False
             st.rerun()
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        ":material/database: Dữ liệu & PKanalix",
-        ":material/schema: Mô hình Cấu trúc & Khởi tạo",
-        ":material/play_arrow: Ước lượng SAEM",
-        ":material/balance: Kiểm chuẩn Monolix 2024",
-        ":material/monitoring: Chẩn đoán GOF",
-        ":material/person: Khớp cá thể (Individual Fits)",
-        ":material/bar_chart: Sàng lọc Covariate & Simulx"
+    # ── GIAO DIỆN CHUẨN MONOLIX THEO QUY TRÌNH 4 BƯỚC ──
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "1. Data",
+        "2. Structural model & Initial estimates",
+        "3. SAEM Estimation",
+        "4. Results & Population parameters",
+        "5. Diagnostic Plots (GOF)",
+        "6. Individual fits (EBE)",
+        "7. Monolix Benchmark",
+        "8. Covariates & Simulx"
     ])
 
     res = st.session_state.get("res")
 
-    # ── TAB 1: DỮ LIỆU & PKANALIX NCA ──
+    # ── BƯỚC 1: NHẬP VÀ KIỂM TRA FILE DỮ LIỆU (DATA) ──
     with tab1:
         if clinical_data is not None:
             header("Bộ dữ liệu lâm sàng thực tế")
@@ -1351,12 +1447,11 @@ def main():
                                          name=grp_name, showlegend=(spag_strat != "Tất cả"), opacity=0.6))
 
             fig.update_layout(title="Observed Concentrations vs Time (83 subjects)", xaxis_title="Time (h)",
-                              yaxis_title="DV (mg/L)", height=450, template="plotly_white")
-            if spag_scale == "Logarit (Semi-log)":
-                fig.update_yaxes(type="log")
+                              yaxis_title="Concentration DV (mg/L)",
+                              yaxis_type="log" if spag_scale == "Logarit (Semi-log)" else "linear",
+                              height=480, template="plotly_white")
             st.plotly_chart(fig, width="stretch")
 
-            # PKanalix NCA Module
             header("Phân tích Phi khoang (PKanalix NCA Module)")
             st.info("Phương pháp hình thang (Trapezoidal Rule) ước lượng tự động các thông số dược động học phi khoang không phụ thuộc giả định mô hình, hỗ trợ kiểm tra dữ liệu và khởi tạo thông số ban đầu.")
             df_ind_nca, df_sum_nca = compute_nca(clinical_data)
@@ -1369,7 +1464,7 @@ def main():
             
             out_csv, _ = data_io.export_monolix(clinical_data)
             with open(out_csv, "rb") as f:
-                st.download_button("Tải file Monolix CSV (`export_monolix.csv`)", f.read(), "export_monolix.csv", "text/csv", icon=":material/download:")
+                st.download_button("Tải file Monolix CSV (export_monolix.csv)", f.read(), "export_monolix.csv", "text/csv")
         else:
             header("Mô phỏng quần thể ảo")
             n_sub_sim = st.slider("Số bệnh nhân mô phỏng", 10, 100, 30, 5)
@@ -1378,7 +1473,7 @@ def main():
                                       sigma_add, sigma_prop, (), n_sub_sim, dose_sim, tuple(T_GRID), len(T_GRID), 42)
             st.dataframe(df_sim.head(50), width="stretch")
 
-    # ── TAB 2: MÔ HÌNH CẤU TRÚC & KHỞI TẠO (MODEL & INITIAL ESTIMATES) ──
+    # ── BƯỚC 2: CHỌN MÔ HÌNH & CHẠY AUTO-ESTIMATE (STRUCTURAL MODEL & INITIAL ESTIMATES) ──
     with tab2:
         header(f"Mô hình Cấu trúc & Thông số Khởi tạo: {model_name}")
         target_data = clinical_data if clinical_data is not None else df_sim
@@ -1390,7 +1485,7 @@ def main():
             lib_id = st.session_state.get("selected_lib_model")
             lib_entry = next((m for m in MONOLIX_LIBRARY if m["id"] == lib_id), None)
             if lib_entry:
-                st.caption(f"📝 {lib_entry.get('desc', '')}")
+                st.caption(f"{lib_entry.get('desc', '')}")
                 mlx_code = f"""; Monolix Model Definition: {lib_id}
 [LONGITUDINAL]
 input = {{{', '.join(lib_entry['params'])}}}
@@ -1401,28 +1496,58 @@ PK:
 OUTPUT:
 output = {{Cc}}
 """
-                with st.expander("📄 Xem mã nguồn mô hình định dạng Monolix (.txt)", expanded=True):
+                with st.expander("Xem mã nguồn mô hình định dạng Monolix (.txt)", expanded=True):
                     st.code(mlx_code, language="text")
             else:
                 st.info(f"Mô hình cấu trúc: {model_name}")
 
         with c_m2:
-            st.markdown("**Các thông số quần thể ban đầu ($\theta_0$):**")
+            st.markdown("**Các thông số quần thể ban đầu ($	heta_0$):**")
             for p in names:
-                st.markdown(rf"- **$\theta_{{{p}}}$**: `{pop_params[p]:.3f} {units_dict.get(p, '')}` (Biến thiên $\omega$: `{omega_dict[p]:.2f}`)")
-            st.caption("💡 Chỉnh sửa các thanh trượt bên thanh trái để xem đường cong nồng độ cập nhật thời gian thực.")
+                st.markdown(rf"- **$	heta_{{{p}}}$**: `{pop_params[p]:.3f} {units_dict.get(p, '')}` (Biến thiên $\omega$: `{omega_dict[p]:.2f}`)")
+
+        # Section Auto-estimate Vd, Cl chuẩn Monolix
+        header("Tự động ước lượng thông số Vd, Cl dự kiến (Auto-estimate)")
+        st.info("Tính năng Auto-estimate chuẩn Monolix: phân tích nhanh dữ liệu lâm sàng bằng NCA để ước lượng trước độ thanh thải CL, thể tích phân bố Vd và thời gian bán thải t1/2, tự động gán vào điểm khởi tạo θ₀ cho thuật toán SAEM.")
+        
+        c_auto1, c_auto2 = st.columns([1.2, 1.8])
+        with c_auto1:
+            if st.button("Tự động ước lượng Vd, Cl dự kiến (Auto-estimate)", type="primary", use_container_width=True, key="btn_auto_estimate"):
+                est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
+                for p_name, p_val in est_dict.items():
+                    val_k = key(f"pop_{p_name}")
+                    st.session_state[val_k] = float(p_val)
+                st.session_state["auto_estimated_flag"] = True
+                st.rerun()
+
+        with c_auto2:
+            est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
+            t_half_nca = np.log(2) * vd_val / cl_val if cl_val > 0 else 0.0
+            col_e1, col_e2, col_e3 = st.columns(3)
+            col_e1.metric("CL dự kiến (NCA)", f"{cl_val:.2f} L/h")
+            col_e2.metric("Vd dự kiến (NCA)", f"{vd_val:.2f} L")
+            col_e3.metric("t1/2 dự kiến", f"{t_half_nca:.1f} h")
+
+        if st.session_state.get("auto_estimated_flag", False):
+            st.success("Đã cập nhật tự động các giá trị khởi tạo Vd, Cl vào thông số ban đầu. Chuyển sang Tab 3 để bắt đầu ước lượng SAEM.")
 
         header("Biểu đồ Trực quan hóa Thông số Khởi tạo đè lên Dữ liệu (Visual Initial Estimates vs Data)")
-        st.info("Đường cong dự đoán quần thể tương ứng với các giá trị $\theta_0$ ban đầu đè lên dữ liệu bệnh nhân thực tế, giúp đánh giá trực quan điểm khởi tạo trước khi chạy SAEM.")
+        st.info("Đường cong dự đoán quần thể tương ứng với các giá trị $	heta_0$ ban đầu đè lên dữ liệu bệnh nhân thực tế, giúp đánh giá trực quan điểm khởi tạo trước khi chạy SAEM.")
         fig_init = initial_estimates_preview_figure(target_data, model_name, pop_params)
         st.plotly_chart(fig_init, width="stretch")
 
-    # ── TAB 3: CẤU HÌNH & ƯỚC LƯỢNG SAEM + BOOTSTRAP ──
+    # ── BƯỚC 3: CHẠY SAEM VỚI CÁC THÔNG SỐ DỰ KIẾN (SAEM ESTIMATION) ──
     with tab3:
         header(f"Chạy ước lượng tham số SAEM: {model_name}")
         target_data = clinical_data if clinical_data is not None else df_sim
         st.info(f"Đang phân tích mô hình: **{model_name}**. Thuật toán SAEM với MCMC 3 kernel kết hợp giải tích từng đoạn. Tính toán -2LL qua Importance Sampling phân phối Student-t5.")
-        if st.button(f"🚀 Bắt đầu ước lượng SAEM ({model_name})", type="primary", width="stretch", icon=":material/play_arrow:"):
+        
+        c_saem_cfg1, c_saem_cfg2, c_saem_cfg3 = st.columns(3)
+        c_saem_cfg1.metric("Pha 1 (Exploratory)", f"{n_iter1} iterations")
+        c_saem_cfg2.metric("Pha 2 (Smoothing)", f"{n_iter2} iterations")
+        c_saem_cfg3.metric("Số chains / Seed", f"{n_chains} chain(s) / {fit_seed}")
+
+        if st.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main"):
             init = dict(
                 mu=np.log([pop_params[p] for p in names]),
                 omega=[omega_dict[p] for p in names],
@@ -1436,69 +1561,25 @@ output = {{Cc}}
             bar.empty()
             st.session_state["res"] = res
             st.session_state.pop("vpc", None)
+            st.success("Ước lượng SAEM hoàn thành thành công! Hãy chuyển sang Tab 4 để xem bảng tham số và phân tích sâu.")
+            st.rerun()
 
-        if "res" in st.session_state:
-            show_fit(st.session_state["res"], clinical_data)
+        if res is not None:
+            st.info("Mô hình đã được ước lượng thành công. Vui lòng chuyển sang Tab 4 (Results & Population parameters) để xem bảng tham số chi tiết, sai số chuẩn SE và đường cong hội tụ.")
 
-    # ── TAB 4: KIỂM CHUẨN MONOLIX 2024 (HEAD-TO-HEAD BENCHMARK) ──
+    # ── BƯỚC 4: KẾT QUẢ QUẦN THỂ & PHÂN TÍCH SÂU (RESULTS) ──
     with tab4:
-        header("Kiểm chuẩn Đối đầu Trực tiếp với Monolix 2024R1 (Head-to-Head Benchmark)")
-        target_data = clinical_data if clinical_data is not None else df_sim
-        is_installed = me.is_monolix_installed()
-        
-        if is_installed:
-            st.success("🟢 **MonolixSuite 2024R1 đã được phát hiện tại**: `/Applications/MonolixSuite2024R1.app`", icon=":material/check_circle:")
-        else:
-            st.info("ℹ️ Monolix chưa được cài đặt ở đường dẫn mặc định trên macOS. Bạn vẫn có thể chỉ định thư mục kết quả Monolix để đối chiếu.")
-
-        c_bm1, c_bm2 = st.columns([1, 1])
-        default_mlx_proj = "/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran") else ""
-        mlx_proj_path = c_bm1.text_input("Đường dẫn file dự án Monolix (.mlxtran)", value=default_mlx_proj, key="mlx_proj_input")
-        default_mlx_dir = "/Users/macbook/Documents/Mô hình 2 ngăn" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn") else ""
-        mlx_export_dir = c_bm2.text_input("Thư mục kết quả xuất Monolix", value=default_mlx_dir, key="mlx_dir_input")
-
-        col_b1, col_b2 = st.columns(2)
-        btn_run_mlx = col_b1.button("🚀 Chạy Monolix 2024 CLI Ngầm (--no-gui)", disabled=not is_installed, type="primary", use_container_width=True)
-        btn_load_mlx = col_b2.button("📂 Tải & So sánh Kết quả Monolix", type="secondary", use_container_width=True)
-
-        if btn_run_mlx:
-            if not os.path.exists(mlx_proj_path):
-                st.error(f"Không tìm thấy file dự án: {mlx_proj_path}")
-            else:
-                with st.spinner("Đang chạy Monolix 2024R1 ở chế độ dòng lệnh ngầm..."):
-                    ok, out, err = me.run_monolix_project(mlx_proj_path)
-                    if ok:
-                        st.success("✅ Monolix đã hoàn thành tính toán thành công!")
-                    else:
-                        st.warning(f"Monolix chạy xong với thông báo: {err or out}")
-
+        header("Kết quả Ước lượng Tham số Quần thể (Population Parameter Estimates)")
         if res is None:
-            st.info("💡 Hãy chạy SAEM ở tab 3 trước để có kết quả SimDx đối chiếu trực tiếp với Monolix.")
+            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
         else:
-            if os.path.exists(mlx_export_dir):
-                df_comp, df_ic = me.build_benchmark_comparison(res, mlx_export_dir)
-                if df_comp is not None:
-                    header("Bảng So sánh Tham số Đối đầu: Monolix 2024R1 vs SimDx")
-                    st.dataframe(df_comp, width="stretch")
-                    
-                    if df_ic is not None:
-                        header("So sánh Tiêu chuẩn Hàm Mục tiêu & Thông tin")
-                        st.dataframe(df_ic, width="stretch")
-
-                    csv_report = df_comp.to_csv(index=False)
-                    st.download_button("Tải Báo cáo Kiểm chuẩn CSV (`benchmark_monolix_simdx.csv`)",
-                                       csv_report, "benchmark_monolix_simdx.csv", "text/csv",
-                                       icon=":material/download:", key="btn_download_bm_csv")
-                else:
-                    st.warning("Chưa tìm thấy file `populationParameters.txt` trong thư mục Monolix chỉ định.")
-            else:
-                st.warning("Thư mục kết quả Monolix không tồn tại. Vui lòng kiểm tra lại đường dẫn.")
+            show_fit(res, clinical_data)
 
     # ── TAB 5: CHẨN ĐOÁN GOF & OUTLIERS ──
     with tab5:
         header("Chẩn đoán mô hình (Goodness-of-Fit & Residuals Distribution)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở tab 3 trước.", icon=":material/warning:")
+            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
         else:
             dg = res["diag"]
             st.plotly_chart(gof_figure(dg), width="stretch")
@@ -1515,25 +1596,29 @@ output = {{Cc}}
             P = len(res["names"])
             cols = st.columns(P + 2)
             for j, p in enumerate(res["names"]):
-                cols[j].metric(f"η-shrinkage {p}", f"{dg['eta_shrink'][j] * 100:.1f}%")
-            cols[P].metric("ε-shrinkage", f"{dg['eps_shrink'] * 100:.1f}%")
+                shrink_val = dg['eta_shrink'][j] if 'eta_shrink' in dg else (res.get('shrinkage', [0]*P)[j])
+                cols[j].metric(f"Shrinkage η_{p}", f"{shrink_val * 100:.1f}%")
+            eps_val = dg.get('eps_shrink', res.get('shrinkage_iwres', 0.0))
+            cols[P].metric("Shrinkage IWRES", f"{eps_val * 100:.1f}%")
             cols[P + 1].metric("NPDE mean / sd", f"{dg['table']['NPDE'].mean():.2f} / {dg['table']['NPDE'].std():.2f}")
 
             # Residual & Outliers table
             header("Phân tích Phần dư & Ngoại lai Chẩn đoán (Flagged Residuals)")
             tt = dg["table"]
-            flagged = tt[(tt["IWRES"].abs() > 2.5) | (tt["NPDE"].abs() > 2.5)]
+            flagged = tt[(tt["IWRES"].abs() > 3.0) | (tt["NPDE"].abs() > 3.0)]
             if len(flagged) > 0:
-                st.markdown(f'<div class="outlier-box">Phát hiện {len(flagged)} điểm quan sát có |IWRES| > 2.5 hoặc |NPDE| > 2.5 cần lưu ý trong hồ sơ kiểm định.</div>', unsafe_allow_html=True)
-                st.dataframe(flagged[["ID", "TIME", "DV", "PRED", "IPRED", "IWRES", "NPDE"]], width="stretch")
+                st.markdown(f'<div class="outlier-box">Phát hiện <b>{len(flagged)}</b> điểm quan sát có |IWRES| > 3 hoặc |NPDE| > 3. Cần kiểm tra liều và thời điểm lấy mẫu bệnh nhân.</div>', unsafe_allow_html=True)
+                time_col = "TIME" if "TIME" in flagged.columns else "Time"
+                cols_to_show = [c for c in ["ID", time_col, "DV", "PRED", "IPRED", "IWRES", "NPDE"] if c in flagged.columns]
+                st.dataframe(flagged[cols_to_show], width="stretch")
             else:
-                st.markdown('<div class="convergence-box">Tất cả các điểm phần dư IWRES và NPDE đều nằm trong giới hạn kiểm soát thống kê an toàn (|residual| ≤ 2.5).</div>', unsafe_allow_html=True)
+                st.markdown('<div class="convergence-box">Tuyệt vời: Không có điểm quan sát nào có |IWRES| > 3 hoặc |NPDE| > 3. Dữ liệu khớp rất tốt với mô hình.</div>', unsafe_allow_html=True)
 
-    # ── TAB 6: KHỚP CÁ THỂ ──
+    # ── TAB 6: KHỚP CÁ THỂ (INDIVIDUAL FITS) ──
     with tab6:
         header("Đường cong nồng độ cá thể (Individual Fits)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở tab 3 trước.", icon=":material/warning:")
+            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
         else:
             d = res["data"]
             sid_choice = st.selectbox("Chọn bệnh nhân (ID)", d["ids"], key="select_patient_tab6")
@@ -1558,50 +1643,106 @@ output = {{Cc}}
 
             sub_d = [d["sub_doses"][sid_choice]] if "sub_doses" in d else None
             sub_c = [d["sub_cov_events"][sid_choice]] if "sub_cov_events" in d else None
-            
-            pred_fine = pk.predict(res["model_name"], t_fine[None, :], d["dose"][idx_sub:idx_sub+1], phi_pop,
-                                   data=d, sub_doses=sub_d, sub_cov=sub_c, beta=res["beta"], cov_model=res["cov_model"])[0]
-            ipred_fine = pk.predict(res["model_name"], t_fine[None, :], d["dose"][idx_sub:idx_sub+1], phi_ind,
-                                    data=d, sub_doses=sub_d, sub_cov=sub_c, beta=res["beta"], cov_model=res["cov_model"])[0]
-            
-            fig = go.Figure()
-            mk = d["mask"][idx_sub]
-            obs_t = d["t"][idx_sub, mk]
-            obs_y = d["y"][idx_sub, mk]
-            if scale_ind == "Logarit (Semi-log)":
-                mk_valid = obs_y > 0
-                obs_t = obs_t[mk_valid]
-                obs_y = obs_y[mk_valid]
+            c_fine_ind = pk.predict(res["model_name"], t_fine[None, :], d["dose"][idx_sub:idx_sub + 1],
+                                    phi_ind, sub_doses=sub_d, sub_cov=sub_c,
+                                    data=d)[0]
+            c_fine_pop = pk.predict(res["model_name"], t_fine[None, :], d["dose"][idx_sub:idx_sub + 1],
+                                    phi_pop, sub_doses=sub_d, sub_cov=sub_c,
+                                    data=d)[0]
 
-            fig.add_trace(go.Scatter(x=obs_t, y=obs_y, mode="markers",
-                                     marker=dict(size=8, color="black"), name="Quan sát thực tế (Obs)"))
-            fig.add_trace(go.Scatter(x=t_fine, y=pred_fine, mode="lines",
-                                     line=dict(dash="dash", color="#d62728", width=1.5), name="PRED (Quần thể)"))
-            fig.add_trace(go.Scatter(x=t_fine, y=ipred_fine, mode="lines",
-                                     line=dict(color="#1565c0", width=2.5), name="IPRED (Cá thể EBE)"))
+            fig_ind = go.Figure()
+            fig_ind.add_trace(go.Scatter(x=t_fine, y=c_fine_ind, mode="lines",
+                                         line=dict(color="#1565c0", width=2.5), name="IPRED (Cá thể)"))
+            fig_ind.add_trace(go.Scatter(x=t_fine, y=c_fine_pop, mode="lines",
+                                         line=dict(color="#d84315", dash="dash", width=1.5), name="PRED (Quần thể)"))
             
-            fig.update_layout(title=f"Đường cong cá thể Bệnh nhân ID {sid_choice}", xaxis_title="Thời gian (giờ)",
-                              yaxis_title="Nồng độ (mg/L)", height=450, template="plotly_white")
-            if scale_ind == "Logarit (Semi-log)":
-                fig.update_yaxes(type="log")
-            st.plotly_chart(fig, width="stretch")
+            mask = d["mask"][idx_sub]
+            obs_t = d["t"][idx_sub, mask]
+            obs_y = d["y"][idx_sub, mask]
+            fig_ind.add_trace(go.Scatter(x=obs_t, y=obs_y, mode="markers",
+                                         marker=dict(size=8, color="#2e7d32", symbol="circle"), name="Quan sát (DV)"))
 
-            # Bảng tổng hợp toàn bộ 83 cá thể EBE
+            fig_ind.update_layout(title=f"Khớp nồng độ cá thể: Bệnh nhân ID {sid_choice}",
+                                  xaxis_title="Thời gian (giờ)", yaxis_title="Nồng độ (mg/L)",
+                                  yaxis_type="log" if scale_ind == "Logarit (Semi-log)" else "linear",
+                                  height=450, template="plotly_white")
+            st.plotly_chart(fig_ind, width="stretch")
+
+            # Bảng tổng hợp EBE và thông số từng cá thể cho toàn bộ 83 bệnh nhân
             header("Bảng Tổng hợp Thông số Dược động học Cá thể (Individual Parameters Table)")
             ebe_rows = []
             for i, sid in enumerate(d["ids"]):
-                row_dict = {"ID": sid}
+                row_data = {"ID": sid}
                 for j, p in enumerate(res["names"]):
-                    row_dict[f"{p}"] = float(np.exp(res["phi_hat"][i, j]))
-                    row_dict[f"η_{p}"] = float(res["phi_hat"][i, j] - pk.pop_mean_phi(res)[i, j])
-                ebe_rows.append(row_dict)
-            st.dataframe(pd.DataFrame(ebe_rows), width="stretch")
+                    row_data[f"{p}_ind"] = round(float(np.exp(res["phi_hat"][i, j])), 3)
+                    row_data[f"eta_{p}"] = round(float(res["phi_hat"][i, j] - pk.pop_mean_phi(res)[i, j]), 4)
+                ebe_rows.append(row_data)
+            df_ebe = pd.DataFrame(ebe_rows)
+            st.dataframe(df_ebe, width="stretch")
+            
+            csv_ebe = df_ebe.to_csv(index=False)
+            st.download_button("Tải file CSV Thông số Cá thể (individual_parameters.csv)",
+                               csv_ebe, "individual_parameters.csv", "text/csv", key="btn_download_ebe_csv")
 
-    # ── TAB 7: SÀNG LỌC COVARIATE & MÔ PHỎNG SIMULX ──
+    # ── TAB 7: KIỂM CHUẨN MONOLIX 2024 (HEAD-TO-HEAD BENCHMARK) ──
     with tab7:
+        header("Kiểm chuẩn Đối đầu Trực tiếp với Monolix 2024R1 (Head-to-Head Benchmark)")
+        target_data = clinical_data if clinical_data is not None else df_sim
+        is_installed = me.is_monolix_installed()
+        
+        if is_installed:
+            st.success("MonolixSuite 2024R1 đã được phát hiện tại: `/Applications/MonolixSuite2024R1.app`")
+        else:
+            st.info("Monolix chưa được cài đặt ở đường dẫn mặc định trên macOS. Bạn vẫn có thể chỉ định thư mục kết quả Monolix để đối chiếu.")
+
+        c_bm1, c_bm2 = st.columns([1, 1])
+        default_mlx_proj = "/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran") else ""
+        mlx_proj_path = c_bm1.text_input("Đường dẫn file dự án Monolix (.mlxtran)", value=default_mlx_proj, key="mlx_proj_input")
+        default_mlx_dir = "/Users/macbook/Documents/Mô hình 2 ngăn" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn") else ""
+        mlx_export_dir = c_bm2.text_input("Thư mục kết quả xuất Monolix", value=default_mlx_dir, key="mlx_dir_input")
+
+        col_b1, col_b2 = st.columns(2)
+        btn_run_mlx = col_b1.button("Chạy Monolix 2024 CLI Ngầm (--no-gui)", disabled=not is_installed, type="primary", use_container_width=True)
+        btn_load_mlx = col_b2.button("Tải & So sánh Kết quả Monolix", type="secondary", use_container_width=True)
+
+        if btn_run_mlx:
+            if not os.path.exists(mlx_proj_path):
+                st.error(f"Không tìm thấy file dự án: {mlx_proj_path}")
+            else:
+                with st.spinner("Đang chạy Monolix 2024R1 ở chế độ dòng lệnh ngầm..."):
+                    ok, out, err = me.run_monolix_project(mlx_proj_path)
+                    if ok:
+                        st.success("Monolix đã hoàn thành tính toán thành công!")
+                    else:
+                        st.warning(f"Monolix chạy xong với thông báo: {err or out}")
+
+        if res is None:
+            st.info("Hãy chạy SAEM ở Bước 3 trước để có kết quả SimDx đối chiếu trực tiếp với Monolix.")
+        else:
+            if os.path.exists(mlx_export_dir):
+                df_comp, df_ic = me.build_benchmark_comparison(res, mlx_export_dir)
+                if df_comp is not None:
+                    header("Bảng So sánh Tham số Đối đầu: Monolix 2024R1 vs SimDx")
+                    st.dataframe(df_comp, width="stretch")
+                    
+                    if df_ic is not None:
+                        header("So sánh Tiêu chuẩn Hàm Mục tiêu & Thông tin")
+                        st.dataframe(df_ic, width="stretch")
+
+                    csv_report = df_comp.to_csv(index=False)
+                    st.download_button("Tải Báo cáo Kiểm chuẩn CSV (benchmark_monolix_simdx.csv)",
+                                       csv_report, "benchmark_monolix_simdx.csv", "text/csv",
+                                       key="btn_download_bm_csv")
+                else:
+                    st.warning("Chưa tìm thấy file populationParameters.txt trong thư mục Monolix chỉ định.")
+            else:
+                st.warning("Thư mục kết quả Monolix không tồn tại. Vui lòng kiểm tra lại đường dẫn.")
+
+    # ── TAB 8: SÀNG LỌC COVARIATE & MÔ PHỎNG SIMULX ──
+    with tab8:
         header("Sàng lọc Covariate & Mô hình Tối ưu (Covariate Search & SCM)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở tab 3 trước.", icon=":material/warning:")
+            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
         else:
             header("Tương quan giữa Hiệu ứng Ngẫu nhiên (η̂ = EBE) và Covariate")
             fig_cov = covariate_correlation_figure(res, clinical_data)
@@ -1618,18 +1759,17 @@ output = {{Cc}}
                 with st.expander("Tham khảo Benchmark: Bảng SCM trên tập dữ liệu chuẩn Vancomycin 83 BN", expanded=False):
                     cov_df = pd.read_csv(cov_summary_path)
                     st.dataframe(cov_df, width="stretch")
-                st.info("💡 Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
-            else:
-                st.info("Chạy `python3 validation/run_covariate_analysis.py` để cập nhật bảng so sánh covariate.")
+                st.info("Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
 
+            # Population Model Equations
             header("Phương trình Dược động học Quần thể (Population Model Equations)")
             render_dynamic_model_equations(res, clinical_data, show_scm_benchmark=True)
 
             header("Thẩm định Mô hình bằng Visual Predictive Check (VPC)")
-            c1, c2 = st.columns(2)
-            n_rep = c1.slider("Số bản sao mô phỏng (Replicates)", 20, 200, 50, 10, key="vpc_nrep")
+            c1, c2, c3 = st.columns([1, 1, 1])
+            n_rep = c1.slider("Số lần mô phỏng quần thể", 10, 100, 50, 10, key="vpc_nrep")
             pcorr = c2.checkbox("Prediction-corrected (pcVPC)", value=True, key="vpc_pcorr")
-            if st.button("Tạo biểu đồ VPC", type="primary", icon=":material/refresh:", key="btn_run_vpc"):
+            if st.button("Tạo biểu đồ VPC", type="primary", key="btn_run_vpc"):
                 st.session_state["vpc"] = (pk.run_vpc(res, n_rep=n_rep, pcorr=pcorr), pcorr)
             if "vpc" in st.session_state:
                 v, pc = st.session_state["vpc"]
@@ -1667,7 +1807,7 @@ output = {{Cc}}
             cl_patient = cl_base * (((p_clcr / ref_clcr) ** beta_cl_clcr) if beta_cl_clcr != 0.0 else 1.0) * sep_factor
             v_patient = v_base * (((p_tbw / ref_tbw) ** beta_v_tbw) if beta_v_tbw != 0.0 else 1.0)
             
-            st.markdown(f"**Thông số dự đoán của bệnh nhân**: $CL = {cl_patient:.2f}\\text{{ L/h}}$, $V = {v_patient:.2f}\\text{{ L}}$ (Thời gian bán thải $t_{{1/2}} = {np.log(2)*v_patient/cl_patient:.1f}\\text{{ h}}$)")
+            st.markdown(f"**Thông số dự đoán của bệnh nhân**: $CL = {cl_patient:.2f}\text{{ L/h}}$, $V = {v_patient:.2f}\text{{ L}}$ (Thời gian bán thải $t_{{1/2}} = {np.log(2)*v_patient/cl_patient:.1f}\text{{ h}}$)")
             
             c_d1, c_d2, c_d3 = st.columns(3)
             reg_dose = c_d1.selectbox("Liều dùng mỗi lần (mg)", [500.0, 750.0, 1000.0, 1250.0, 1500.0, 2000.0], index=2, key="sim_dose")
@@ -1708,7 +1848,7 @@ output = {{Cc}}
             header("Mã nguồn R Tự động phục vụ Nghiên cứu Khoa học (Reproducible R Script)")
             st.info("Xuất trọn bộ mã nguồn phân tích R chuẩn mực để đính kèm bài báo khoa học hoặc nghiệm thu đề tài, tương thích với RStudio.")
             r_code = generate_r_script(res)
-            st.download_button("Tải file R Script Phân tích (`SimDx_analysis.R`)", r_code, "SimDx_analysis.R", "text/plain", icon=":material/download:", key="btn_download_r_script")
+            st.download_button("Tải file R Script Phân tích (SimDx_analysis.R)", r_code, "SimDx_analysis.R", "text/plain", key="btn_download_r_script")
 
 
 if __name__ == "__main__":
