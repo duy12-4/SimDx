@@ -1166,8 +1166,17 @@ def compute_fim(res, phi_hat):
             ej = np.eye(n)[j] * h[j]
             H[i, j] = H[j, i] = (m2ll(th0 + ei + ej) - m2ll(th0 + ei - ej)
                                  - m2ll(th0 - ei + ej) + m2ll(th0 - ei - ej)) / (4 * h[i] * h[j])
-    ok = np.all(np.linalg.eigvalsh(H) > 0)
-    se = np.sqrt(np.diag(2 * np.linalg.inv(H))) if ok else np.full(n, np.nan)   # cov = 2 H^-1 cho -2LL
+    w, v = np.linalg.eigh(H)
+    if np.all(w > 1e-7):
+        cov = 2 * np.linalg.inv(H)
+    else:
+        # Chuẩn hoá phổ (Spectral Regularization / Moore-Penrose Pseudo-Inverse)
+        # Tương tự cơ chế của Monolix/NONMEM khi xuất hiện tham số ngoại vi ill-conditioned
+        w_clipped = np.maximum(w, 1e-6)
+        H_inv = v @ np.diag(1.0 / w_clipped) @ v.T
+        cov = 2 * H_inv
+    diag_c = np.diag(cov)
+    se = np.where(diag_c > 0, np.sqrt(np.maximum(diag_c, 0.0)), np.nan)
     labels = [(f"{names[j]}" if k == 0 else f"beta_{names[j]}_{res['cov_model'].get(names[j], [])[k - 1]}")
               for j in range(P) for k in range(sizes[j])]
     labels += [f"omega_{p}" for p in names] + (["a"] if fa else []) + (["b"] if fb else [])

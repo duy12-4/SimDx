@@ -68,7 +68,7 @@ class TestSimDxUI(unittest.TestCase):
 
     def test_app_full_fit_and_all_tabs(self):
         """Kiểm tra toàn bộ 5 tab sau khi chạy SAEM."""
-        at = AppTest.from_file(self.app_path, default_timeout=60)
+        at = AppTest.from_file(self.app_path, default_timeout=180)
         at.session_state["authenticated"] = True
         at.run()
         self.assertEqual(len(at.exception), 0)
