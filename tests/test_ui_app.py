@@ -177,16 +177,16 @@ class TestSimDxUI(unittest.TestCase):
 
         self.assertIsNotNone(at.session_state.get("res"), "SAEM fit phải có kết quả")
 
-        # Chuyển tuần tự qua tất cả các tab: Tab 3, Tab 4 (Equations), Tab 5 (GOF), Tab 6 (EBE), Tab 7 (Covariates)
+        # Chuyển tuần tự qua tất cả các tab: Tab 3, Tab 4 (GOF), Tab 5 (EBE), Tab 6 (Covariates), Tab 7 (Equations)
         tabs_to_test = [
             "3. Results & Population parameters",
-            "4. Model Equations (Phương trình PopPK)",
-            "5. Diagnostic Plots (GOF)",
-            "6. Individual fits (EBE)",
-            "7. Covariates & Simulx",
+            "4. Diagnostic Plots (GOF)",
+            "5. Individual fits (EBE)",
+            "6. Covariates & Simulx",
+            "7. Model Equations (Phương trình PopPK)",
             "1. Data",
             "2. SAEM Estimation & Initial Estimates",
-            "4. Model Equations (Phương trình PopPK)"
+            "7. Model Equations (Phương trình PopPK)"
         ]
 
         for tab_name in tabs_to_test:
@@ -200,6 +200,13 @@ class TestSimDxUI(unittest.TestCase):
             warnings_text = [w.value for w in at.warning]
             self.assertFalse(any("chạy SAEM ở bước 2 trước" in str(w) for w in warnings_text),
                              f"Cảnh báo yêu cầu chạy lại SAEM xuất hiện tại {tab_name}: {warnings_text}")
+
+        # Thử bấm nút 'Đặt lại phiên làm việc' ở sidebar - không được ném StreamlitWidgetAlreadyInstantiatedError
+        reset_btn = [b for b in at.sidebar.button if "Đặt lại phiên làm việc" in (b.label or "")][0]
+        reset_btn.click().run()
+        self.assertEqual(len(at.exception), 0, f"Exception khi bấm Đặt lại phiên làm việc: {at.exception}")
+        self.assertIsNone(at.session_state.get("clinical_data"), "Dữ liệu phải được xóa sau khi đặt lại phiên")
+        self.assertEqual(at.session_state.get("nav_step"), "1. Data")
 
 if __name__ == "__main__":
     unittest.main()

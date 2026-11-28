@@ -1153,7 +1153,7 @@ def show_fit(res, clinical_data=None):
     c[3].metric("BICc", f"{ic['bicc']:.1f}")
 
     # Gợi ý chuyển sang tab Phương trình Dược động học Quần thể (PopPK Model Equations)
-    st.info("Hệ phương trình Dược động học Quần thể (3-Tier NLME), các chỉ số thẩm định (OFV, AIC, BIC, Shrinkage, MPE, RMSE) và tài liệu cơ sở lý thuyết đã được chuyển sang tab chuyên biệt **'4. Model Equations (Phương trình PopPK)'** trên thanh điều hướng.")
+    st.info("Hệ phương trình Dược động học Quần thể (3-Tier NLME), các chỉ số thẩm định (OFV, AIC, BIC, Shrinkage, MPE, RMSE) và tài liệu cơ sở lý thuyết đã được chuyển sang tab chuyên biệt **'7. Model Equations (Phương trình PopPK)'** trên thanh điều hướng.")
 
     header("SAEM Convergence Traces")
     st.plotly_chart(convergence_figure(res), width="stretch", key="fig_saem_convergence")
@@ -1461,10 +1461,9 @@ def reset_entire_session():
             os.remove(SESSION_CACHE_FILE)
         except Exception:
             pass
-    for k in ["clinical_data", "loaded_data_name", "tinf_val", "saved_models_res", "res", "vpc", "model_confirmed_for", "boot_df"]:
+    for k in ["clinical_data", "loaded_data_name", "tinf_val", "saved_models_res", "res", "vpc", "model_confirmed_for", "boot_df", "auto_estimated_flag"]:
         st.session_state.pop(k, None)
-    st.session_state["nav_step"] = "1. Data"
-    st.session_state["sidebar_nav_radio"] = "1. Data"
+    st.session_state["pending_nav_step"] = "1. Data"
 
 
 def main():
@@ -1487,10 +1486,10 @@ def main():
         "1. Data",
         "2. SAEM Estimation & Initial Estimates",
         "3. Results & Population parameters",
-        "4. Model Equations (Phương trình PopPK)",
-        "5. Diagnostic Plots (GOF)",
-        "6. Individual fits (EBE)",
-        "7. Covariates & Simulx"
+        "4. Diagnostic Plots (GOF)",
+        "5. Individual fits (EBE)",
+        "6. Covariates & Simulx",
+        "7. Model Equations (Phương trình PopPK)"
     ]
 
     # ── THANH BÊN (SIDEBAR): CHỈ CHỨA LOGO, BRAND, VÀ ĐIỀU HƯỚNG QUY TRÌNH WORKFLOW ──
@@ -1991,16 +1990,8 @@ output = {{Cc}}
                     csv_diag = res["diag"]["table"].to_csv(index=False).encode('utf-8')
                     st.download_button("Tải bảng Chẩn đoán Phần dư (CSV)", csv_diag, "diagnostics_residuals.csv", "text/csv", use_container_width=True)
 
-    # ── MÀN HÌNH 4: MODEL EQUATIONS (PHƯƠNG TRÌNH POPPK & CƠ SỞ LÝ THUYẾT) ──
-    elif current_tab == "4. Model Equations (Phương trình PopPK)":
-        header("Phương trình Dược động học Quần thể & Cơ sở Lý thuyết (Population PK Model Equations)")
-        if res is None:
-            st.warning("Vui lòng chạy SAEM ở bước 2 trước để hệ thống tính toán phương trình động.")
-        else:
-            render_poppk_equations_tab(res, clinical_data)
-
-    # ── MÀN HÌNH 5: DIAGNOSTIC PLOTS (GOF) ──
-    elif current_tab == "5. Diagnostic Plots (GOF)":
+    # ── MÀN HÌNH 4: DIAGNOSTIC PLOTS (GOF) ──
+    elif current_tab == "4. Diagnostic Plots (GOF)":
         header("Chẩn đoán mô hình (Goodness-of-Fit & Residuals Distribution)")
         if res is None:
             st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
@@ -2035,8 +2026,8 @@ output = {{Cc}}
             else:
                 st.markdown('<div class="convergence-box">Tuyệt vời: Không có điểm quan sát nào có |IWRES| > 3 hoặc |NPDE| > 3. Dữ liệu khớp rất tốt với mô hình.</div>', unsafe_allow_html=True)
 
-    # ── MÀN HÌNH 6: INDIVIDUAL FITS (EBE) ──
-    elif current_tab == "6. Individual fits (EBE)":
+    # ── MÀN HÌNH 5: INDIVIDUAL FITS (EBE) ──
+    elif current_tab == "5. Individual fits (EBE)":
         header("Đường cong nồng độ cá thể (Individual Fits)")
         if res is None:
             st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
@@ -2103,8 +2094,8 @@ output = {{Cc}}
             st.download_button("Tải file CSV Thông số Cá thể (individual_parameters.csv)",
                                csv_ebe, "individual_parameters.csv", "text/csv", key="btn_download_ebe_csv")
 
-    # ── MÀN HÌNH 7: COVARIATES & SIMULX ──
-    elif current_tab == "7. Covariates & Simulx":
+    # ── MÀN HÌNH 6: COVARIATES & SIMULX ──
+    elif current_tab == "6. Covariates & Simulx":
         header("Sàng lọc Covariate & Mô hình Tối ưu (Covariate Search & SCM)")
         if res is None:
             st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
@@ -2125,9 +2116,6 @@ output = {{Cc}}
                     cov_df = pd.read_csv(cov_summary_path)
                     st.dataframe(cov_df, width="stretch")
                 st.info("Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
-
-            with st.expander("Xem Phương trình Dược động học Quần thể & Chỉ số Thẩm định", expanded=False):
-                render_poppk_equations_tab(res, clinical_data)
 
             header("Thẩm định Mô hình bằng Visual Predictive Check (VPC)")
             c1, c2, c3 = st.columns([1, 1, 1])
@@ -2206,6 +2194,14 @@ output = {{Cc}}
             st.info("Xuất trọn bộ mã nguồn phân tích R chuẩn mực để đính kèm bài báo khoa học hoặc nghiệm thu đề tài, tương thích với RStudio.")
             r_code = generate_r_script(res)
             st.download_button("Tải file R Script Phân tích (SimDx_analysis.R)", r_code, "SimDx_analysis.R", "text/plain", key="btn_download_r_script")
+
+    # ── MÀN HÌNH 7: MODEL EQUATIONS (PHƯƠNG TRÌNH POPPK & CƠ SỞ LÝ THUYẾT) ──
+    elif current_tab == "7. Model Equations (Phương trình PopPK)":
+        header("Phương trình Dược động học Quần thể & Cơ sở Lý thuyết (Population PK Model Equations)")
+        if res is None:
+            st.warning("Vui lòng chạy SAEM ở bước 2 trước để hệ thống tính toán phương trình động.")
+        else:
+            render_poppk_equations_tab(res, clinical_data)
 
 
 if __name__ == "__main__":
