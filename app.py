@@ -1335,12 +1335,20 @@ def main():
         units_dict = dict(zip(names, units))
         key = lambda s: f"{model_name}_{s}"
 
+        # Áp dụng các ước lượng tự động Auto-estimate trước khi widget slider được khởi tạo
+        if "pending_auto_estimates" in st.session_state:
+            pending = st.session_state.pop("pending_auto_estimates")
+            for p_k, p_v in pending.items():
+                st.session_state[p_k] = p_v
+            st.session_state["auto_estimated_flag"] = True
+
         st.markdown("### Thông số quần thể ban đầu (θ)")
         pop_params = {}
         for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
             step = 0.05 if r[1] < 10 else 0.5
             val_k = key(f"pop_{p}")
-            pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), float(st.session_state.get(val_k, d)), float(step), key=val_k)
+            val_arg = None if val_k in st.session_state else float(d)
+            pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), val_arg, float(step), key=val_k)
 
         st.markdown("### Biến thiên giữa các cá thể (ω)")
         omega_dict = {p: st.slider(f"ω_{p}", 0.05, 1.0, float(st.session_state.get(key(f"om_{p}"), 0.3)), 0.05, key=key(f"om_{p}")) for p in names}
@@ -1514,10 +1522,11 @@ output = {{Cc}}
         with c_auto1:
             if st.button("Tự động ước lượng Vd, Cl dự kiến (Auto-estimate)", type="primary", use_container_width=True, key="btn_auto_estimate"):
                 est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
+                pending_dict = {}
                 for p_name, p_val in est_dict.items():
                     val_k = key(f"pop_{p_name}")
-                    st.session_state[val_k] = float(p_val)
-                st.session_state["auto_estimated_flag"] = True
+                    pending_dict[val_k] = float(p_val)
+                st.session_state["pending_auto_estimates"] = pending_dict
                 st.rerun()
 
         with c_auto2:
