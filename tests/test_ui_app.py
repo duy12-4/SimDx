@@ -3,8 +3,8 @@ tests/test_ui_app.py - Automated UI & Component Verification for SimDx app.py
 
 Uses Streamlit's official AppTest framework to verify:
 1. Initial page load and dataset loading (Dataset_chính_thức.xlsx)
-2. All 5 tabs render without exceptions
-3. Running SAEM fit populates results and renders Diagnostics, Individual Fits, VPC, Covariates without errors
+2. Workflow gating: Model selection required before unlocking initial estimates & SAEM execution
+3. Running SAEM fit populates results and automatically transitions to Results tab
 """
 import os
 import sys
@@ -41,7 +41,7 @@ class TestSimDxUI(unittest.TestCase):
         self.assertTrue(at.session_state.get("authenticated", False))
 
     def test_app_initial_load(self):
-        """Kiểm tra khởi động ban đầu của app.py khi đã đăng nhập."""
+        """Kiểm tra khởi động ban đầu của app.py: data ban đầu trắng, sau khi nạp thì hiển thị metric đầy đủ."""
         at = AppTest.from_file(self.app_path, default_timeout=30)
         at.session_state["authenticated"] = True
         at.run()
@@ -51,7 +51,13 @@ class TestSimDxUI(unittest.TestCase):
         all_texts = [str(t.value) for t in list(at.title) + list(at.markdown)]
         self.assertTrue(any("SimDx" in t for t in all_texts))
 
-        # Kiểm tra metric thẻ dữ liệu lâm sàng
+        # Ban đầu chưa nạp dữ liệu, hiển thị hướng dẫn
+        load_btn = [b for b in at.button if "Nạp Dataset chuẩn lâm sàng" in (b.label or "")]
+        self.assertTrue(len(load_btn) > 0, "Nút nạp dataset mẫu không tìm thấy")
+        load_btn[0].click().run()
+        self.assertEqual(len(at.exception), 0)
+
+        # Kiểm tra metric thẻ dữ liệu lâm sàng sau khi nạp
         metrics_labels = [m.label for m in at.metric]
         self.assertIn("Bệnh nhân", metrics_labels)
         self.assertIn("Tổng số liều", metrics_labels)
@@ -67,15 +73,16 @@ class TestSimDxUI(unittest.TestCase):
                 self.assertEqual(str(m.value), "278")
 
     def test_app_full_fit_and_all_tabs(self):
-        """Kiểm tra toàn bộ quy trình: Data -> SAEM -> Tự động chuyển Results."""
+        """Kiểm tra toàn bộ quy trình: Data -> Chọn & Xác nhận Model -> SAEM -> Tự động chuyển Results."""
         at = AppTest.from_file(self.app_path, default_timeout=180)
         at.session_state["authenticated"] = True
         at.run()
         self.assertEqual(len(at.exception), 0)
 
-        # Chọn dataset lâm sàng
-        data_radio = [r for r in at.radio if "Chọn dữ liệu" in (r.label or "")][0]
-        data_radio.set_value("Dataset lâm sàng (Dataset_chính_thức.xlsx)").run()
+        # Nạp dataset lâm sàng chuẩn
+        load_btn = [b for b in at.button if "Nạp Dataset chuẩn lâm sàng" in (b.label or "")]
+        self.assertTrue(len(load_btn) > 0)
+        load_btn[0].click().run()
         self.assertEqual(len(at.exception), 0)
 
         # Bấm nút 'Tiếp tục: Cấu hình & Chạy SAEM →'
@@ -84,9 +91,29 @@ class TestSimDxUI(unittest.TestCase):
         btn_goto[0].click().run()
         self.assertEqual(at.session_state.get("nav_step"), "2. SAEM Estimation & Initial Estimates")
 
-        # Tìm button 'Bắt đầu ước lượng SAEM'
-        run_buttons = [b for b in at.button if "Bắt đầu ước lượng SAEM" in b.label]
-        self.assertTrue(len(run_buttons) > 0, "Button 'Bắt đầu ước lượng SAEM' not found")
+        # Ban đầu chưa xác nhận mô hình: nút chạy SAEM KHÔNG ĐƯỢC PHÉP xuất hiện
+        run_buttons_before = [b for b in at.button if "Bắt đầu ước lượng SAEM" in (b.label or "")]
+        self.assertEqual(len(run_buttons_before), 0, "Nút chạy SAEM không được xuất hiện trước khi xác nhận mô hình!")
+
+        # Tìm nút xác nhận mô hình
+        btn_confirm = [b for b in at.button if "Xác nhận chọn mô hình này" in (b.label or "")]
+        self.assertTrue(len(btn_confirm) > 0, "Nút 'Xác nhận chọn mô hình này' phải tồn tại")
+        btn_confirm[0].click().run()
+        self.assertEqual(len(at.exception), 0)
+
+        # Sau khi xác nhận mô hình: Nút chạy SAEM và Auto-estimate xuất hiện
+        run_buttons = [b for b in at.button if "Bắt đầu ước lượng SAEM" in (b.label or "")]
+        self.assertTrue(len(run_buttons) > 0, "Button 'Bắt đầu ước lượng SAEM' not found after confirmation")
+
+        # Test Auto-estimate button
+        btn_auto = [b for b in at.button if "Tự động ước lượng Vd, Cl" in (b.label or "")]
+        self.assertTrue(len(btn_auto) > 0, "Button 'Tự động ước lượng Vd, Cl' not found")
+        btn_auto[0].click().run()
+        self.assertEqual(len(at.exception), 0, f"Exception on Auto-estimate: {at.exception}")
+
+        # Tìm lại button 'Bắt đầu ước lượng SAEM' sau khi auto-estimate rerun
+        run_buttons = [b for b in at.button if "Bắt đầu ước lượng SAEM" in (b.label or "")]
+        self.assertTrue(len(run_buttons) > 0)
 
         # Click và chạy SAEM
         run_buttons[0].click().run()

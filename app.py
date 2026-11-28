@@ -1528,6 +1528,7 @@ def main():
                             st.session_state.pop("selected_lib_model", None)
                     st.session_state.pop("res", None)
                     st.session_state.pop("vpc", None)
+                    st.session_state.pop("model_confirmed_for", None)
 
                 model_name = st.selectbox(
                     "Mô hình cấu trúc",
@@ -1574,106 +1575,134 @@ output = {{Cc}}
                     with st.expander("Xem mã nguồn mô hình định dạng Monolix (.txt)", expanded=False):
                         st.code(mlx_code, language="text")
 
+            # Nút xác nhận lựa chọn mô hình để mở khóa bước ước lượng tham số
+            c_act1, c_act2 = st.columns([1.6, 1.4])
+            is_model_confirmed = st.session_state.get("model_confirmed_for", "") == model_name
+
+            with c_act1:
+                if not is_model_confirmed:
+                    st.info("Vui lòng nhấn **'Xác nhận chọn mô hình này'** để hệ thống khởi tạo tham số và mở khóa bảng điều khiển SAEM.")
+                else:
+                    st.success(f"Đã chọn mô hình: **{model_name}**. Bảng điều khiển khởi tạo tham số và SAEM bên dưới đã sẵn sàng.")
+
+            with c_act2:
+                btn_lbl = "Đổi sang mô hình khác" if is_model_confirmed else "Xác nhận chọn mô hình này →"
+                btn_type = "secondary" if is_model_confirmed else "primary"
+                if st.button(btn_lbl, type=btn_type, use_container_width=True, key="btn_confirm_model_select"):
+                    if is_model_confirmed:
+                        st.session_state["model_confirmed_for"] = ""
+                    else:
+                        st.session_state["model_confirmed_for"] = model_name
+                    st.rerun()
+
             st.markdown("<hr style='margin:12px 0 16px 0; border:none; border-top:1px solid #cbd5e1;'/>", unsafe_allow_html=True)
 
-            # ── BỐ TRÍ 2 CỘT CHUẨN MONOLIX: BIỂU ĐỒ BÊN TRÁI | BẢNG ĐIỀU KHIỂN KHỞI TẠO BÊN PHẢI ──
-            col_chart, col_ctrl = st.columns([1.35, 1.0], gap="large")
+            if not is_model_confirmed:
+                st.markdown("""
+                <div style="background:#f8fafc;border:2px dashed #94a3b8;border-radius:12px;padding:32px;text-align:center;margin:16px 0;">
+                    <h4 style="color:#0f172a;margin-bottom:6px;font-weight:700;">Chưa xác nhận mô hình Dược động học</h4>
+                    <p style="color:#64748b;font-size:14px;max-width:550px;margin:0 auto;">
+                        Sau khi lựa chọn mô hình ở trên hoặc duyệt từ <b>Monolix Library</b>, bấm nút <b>"Xác nhận chọn mô hình này →"</b> để mở khóa biểu đồ trực quan hóa Initial Estimates và bảng điều khiển chạy SAEM bên tay phải.
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                # ── BỐ TRÍ 2 CỘT CHUẨN MONOLIX: BIỂU ĐỒ BÊN TRÁI | BẢNG ĐIỀU KHIỂN KHỞI TẠO BÊN PHẢI ──
+                col_chart, col_ctrl = st.columns([1.35, 1.0], gap="large")
 
-            # ── CỘT TRÁI: BIỂU ĐỒ TRỰC QUAN HÓA INITIAL ESTIMATES OVERLAID TRÊN DỮ LIỆU BỆNH NHÂN ──
-            with col_chart:
-                header("Trực quan hóa Khởi tạo đè lên Dữ liệu (Initial Estimates Plot)")
-                st.caption("Đường cong dự đoán quần thể tương ứng với các giá trị $	heta_0$ ban đầu đè lên dữ liệu bệnh nhân thực tế.")
-                
-                # Sắp xếp pop_params tạm thời để vẽ đồ thị
-                temp_pop_params = {}
-                for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
-                    val_k = key(f"pop_{p}")
-                    temp_pop_params[p] = float(st.session_state.get(val_k, d))
-                
-                fig_init = initial_estimates_preview_figure(clinical_data, model_name, temp_pop_params)
-                fig_init.update_layout(height=480)
-                st.plotly_chart(fig_init, width="stretch")
+                # ── CỘT TRÁI: BIỂU ĐỒ TRỰC QUAN HÓA INITIAL ESTIMATES OVERLAID TRÊN DỮ LIỆU BỆNH NHÂN ──
+                with col_chart:
+                    header("Trực quan hóa Khởi tạo đè lên Dữ liệu (Initial Estimates Plot)")
+                    st.caption("Đường cong dự đoán quần thể tương ứng với các giá trị $\\theta_0$ ban đầu đè lên dữ liệu bệnh nhân thực tế.")
+                    
+                    temp_pop_params = {}
+                    for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
+                        val_k = key(f"pop_{p}")
+                        temp_pop_params[p] = float(st.session_state.get(val_k, d))
+                    
+                    fig_init = initial_estimates_preview_figure(clinical_data, model_name, temp_pop_params)
+                    fig_init.update_layout(height=480)
+                    st.plotly_chart(fig_init, width="stretch")
 
-                # Cài đặt thuật toán SAEM và Nút chạy đặt ở chân cột biểu đồ
-                header(f"Chạy ước lượng SAEM: {model_name}")
-                c_saem1, c_saem2, c_saem3, c_saem4 = st.columns(4)
-                n_iter1 = c_saem1.slider("K1 (Exploratory)", 50, 600, 250, 50, key="main_k1")
-                n_iter2 = c_saem2.slider("K2 (Smoothing)", 25, 400, 150, 25, key="main_k2")
-                n_chains = c_saem3.slider("Chains", 1, 3, 1, key="main_chains")
-                fit_seed = c_saem4.number_input("Seed", 0, 9999, 42, key="main_seed")
+                    # Cài đặt thuật toán SAEM và Nút chạy đặt ở chân cột biểu đồ
+                    header(f"Chạy ước lượng SAEM: {model_name}")
+                    c_saem1, c_saem2, c_saem3, c_saem4 = st.columns(4)
+                    n_iter1 = c_saem1.slider("K1 (Exploratory)", 50, 600, 250, 50, key="main_k1")
+                    n_iter2 = c_saem2.slider("K2 (Smoothing)", 25, 400, 150, 25, key="main_k2")
+                    n_chains = c_saem3.slider("Chains", 1, 3, 1, key="main_chains")
+                    fit_seed = c_saem4.number_input("Seed", 0, 9999, 42, key="main_seed")
 
-                if st.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main"):
-                    init = dict(
-                        mu=np.log([st.session_state.get(key(f"pop_{p}"), mi["defaults"][j]) for j, p in enumerate(names)]),
-                        omega=[st.session_state.get(key(f"om_{p}"), 0.3) for p in names],
-                        err=[float(st.session_state.get("main_sigma_a", 1.0)), float(st.session_state.get("main_sigma_b", 0.2))]
-                    )
-                    cov_model_run = {}
-                    for s in st.session_state.get("main_cov_select", []):
-                        p_cov, c_cov = s.split("~")
-                        cov_model_run.setdefault(p_cov, []).append(c_cov)
-                    cov_mode_run = st.session_state.get("main_cov_mode", "time-varying")
-                    err_model_run = st.session_state.get("main_error_model_select", "combined")
+                    if st.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main"):
+                        init = dict(
+                            mu=np.log([st.session_state.get(key(f"pop_{p}"), mi["defaults"][j]) for j, p in enumerate(names)]),
+                            omega=[st.session_state.get(key(f"om_{p}"), 0.3) for p in names],
+                            err=[float(st.session_state.get("main_sigma_a", 1.0)), float(st.session_state.get("main_sigma_b", 0.2))]
+                        )
+                        cov_model_run = {}
+                        for s in st.session_state.get("main_cov_select", []):
+                            p_cov, c_cov = s.split("~")
+                            cov_model_run.setdefault(p_cov, []).append(c_cov)
+                        cov_mode_run = st.session_state.get("main_cov_mode", "time-varying")
+                        err_model_run = st.session_state.get("main_error_model_select", "combined")
 
-                    bar = st.progress(0, text="Đang chạy SAEM...")
-                    res = pk.fit_model(clinical_data, model_name, init, cov_model_run, err_model_run,
-                                       n_iter1=n_iter1, n_iter2=n_iter2, n_chains=n_chains,
-                                       seed=int(fit_seed), progress=lambda x: bar.progress(x, text=f"SAEM {x:.0%}"),
-                                       cov_mode=cov_mode_run)
-                    bar.empty()
-                    st.session_state["res"] = res
-                    st.session_state.pop("vpc", None)
-                    st.session_state["pending_nav_step"] = "3. Results & Population parameters"
-                    st.rerun()
+                        bar = st.progress(0, text="Đang chạy SAEM...")
+                        res = pk.fit_model(clinical_data, model_name, init, cov_model_run, err_model_run,
+                                           n_iter1=n_iter1, n_iter2=n_iter2, n_chains=n_chains,
+                                           seed=int(fit_seed), progress=lambda x: bar.progress(x, text=f"SAEM {x:.0%}"),
+                                           cov_mode=cov_mode_run)
+                        bar.empty()
+                        st.session_state["res"] = res
+                        st.session_state.pop("vpc", None)
+                        st.session_state["pending_nav_step"] = "3. Results & Population parameters"
+                        st.rerun()
 
-            # ── CỘT PHẢI: THANH ĐIỀU KHIỂN ƯỚC LƯỢNG THAM SỐ KHỞI TẠO (INITIAL ESTIMATES PANEL) ──
-            with col_ctrl:
-                header("Bảng Điều khiển Tham số Khởi tạo")
-                
-                # Nút Auto-estimate và kết quả NCA tóm tắt
-                st.markdown("##### Tự động ước lượng (Auto-estimate)")
-                if st.button("Tự động ước lượng Vd, Cl (Auto-estimate)", type="primary", use_container_width=True, key="btn_auto_estimate"):
+                # ── CỘT PHẢI: THANH ĐIỀU KHIỂN ƯỚC LƯỢNG THAM SỐ KHỞI TẠO (INITIAL ESTIMATES PANEL) ──
+                with col_ctrl:
+                    header("Bảng Điều khiển Tham số Khởi tạo")
+                    
+                    st.markdown("##### Tự động ước lượng (Auto-estimate)")
+                    if st.button("Tự động ước lượng Vd, Cl (Auto-estimate)", type="primary", use_container_width=True, key="btn_auto_estimate"):
+                        est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
+                        pending_dict = {}
+                        for p_name, p_val in est_dict.items():
+                            val_k = key(f"pop_{p_name}")
+                            pending_dict[val_k] = float(p_val)
+                        st.session_state["pending_auto_estimates"] = pending_dict
+                        st.rerun()
+
                     est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
-                    pending_dict = {}
-                    for p_name, p_val in est_dict.items():
-                        val_k = key(f"pop_{p_name}")
-                        pending_dict[val_k] = float(p_val)
-                    st.session_state["pending_auto_estimates"] = pending_dict
-                    st.rerun()
+                    t_half_nca = np.log(2) * vd_val / cl_val if cl_val > 0 else 0.0
+                    col_e1, col_e2, col_e3 = st.columns(3)
+                    col_e1.metric("CL (NCA)", f"{cl_val:.2f} L/h")
+                    col_e2.metric("Vd (NCA)", f"{vd_val:.2f} L")
+                    col_e3.metric("t1/2", f"{t_half_nca:.1f} h")
 
-                est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
-                t_half_nca = np.log(2) * vd_val / cl_val if cl_val > 0 else 0.0
-                col_e1, col_e2, col_e3 = st.columns(3)
-                col_e1.metric("CL (NCA)", f"{cl_val:.2f} L/h")
-                col_e2.metric("Vd (NCA)", f"{vd_val:.2f} L")
-                col_e3.metric("t1/2", f"{t_half_nca:.1f} h")
+                    if st.session_state.get("auto_estimated_flag", False):
+                        st.success("Đã gán giá trị Vd, Cl dự kiến vào các thanh trượt bên dưới!")
 
-                if st.session_state.get("auto_estimated_flag", False):
-                    st.success("Đã gán giá trị Vd, Cl dự kiến vào các thanh trượt bên dưới!")
+                    st.markdown("---")
+                    st.markdown("##### Thông số quần thể ban đầu (θ):")
+                    pop_params = {}
+                    for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
+                        step = 0.05 if r[1] < 10 else 0.5
+                        val_k = key(f"pop_{p}")
+                        val_arg = None if val_k in st.session_state else float(d)
+                        pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), val_arg, float(step), key=val_k)
 
-                st.markdown("---")
-                st.markdown("##### Thông số quần thể ban đầu (θ):")
-                pop_params = {}
-                for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
-                    step = 0.05 if r[1] < 10 else 0.5
-                    val_k = key(f"pop_{p}")
-                    val_arg = None if val_k in st.session_state else float(d)
-                    pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), val_arg, float(step), key=val_k)
+                    st.markdown("##### Biến thiên giữa các cá thể (ω):")
+                    omega_dict = {p: st.slider(f"ω_{p}", 0.05, 1.0, float(st.session_state.get(key(f"om_{p}"), 0.3)), 0.05, key=key(f"om_{p}")) for p in names}
 
-                st.markdown("##### Biến thiên giữa các cá thể (ω):")
-                omega_dict = {p: st.slider(f"ω_{p}", 0.05, 1.0, float(st.session_state.get(key(f"om_{p}"), 0.3)), 0.05, key=key(f"om_{p}")) for p in names}
+                    st.markdown("##### Mô hình sai số dư:")
+                    err_models = ["combined", "combined1", "constant", "proportional"]
+                    error_model = st.selectbox("Error Model", err_models, key="main_error_model_select")
+                    col_err_a, col_err_b = st.columns(2)
+                    sigma_add = col_err_a.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1, key="main_sigma_a")
+                    sigma_prop = col_err_b.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02, key="main_sigma_b")
 
-                st.markdown("##### Mô hình sai số dư:")
-                err_models = ["combined", "combined1", "constant", "proportional"]
-                error_model = st.selectbox("Error Model", err_models, key="main_error_model_select")
-                col_err_a, col_err_b = st.columns(2)
-                sigma_add = col_err_a.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1, key="main_sigma_a")
-                sigma_prop = col_err_b.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02, key="main_sigma_b")
-
-                st.markdown("##### Covariate lâm sàng:")
-                cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
-                cov_sel = st.multiselect("Hiệu ứng covariate", cov_opts, default=[], key="main_cov_select")
-                cov_mode = st.radio("Chế độ Covariate", ["time-varying", "baseline"], horizontal=True, key="main_cov_mode")
+                    st.markdown("##### Covariate lâm sàng:")
+                    cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
+                    cov_sel = st.multiselect("Hiệu ứng covariate", cov_opts, default=[], key="main_cov_select")
+                    cov_mode = st.radio("Chế độ Covariate", ["time-varying", "baseline"], horizontal=True, key="main_cov_mode")
 
     elif current_tab == "3. Results & Population parameters":
         header("Kết quả Ước lượng Tham số Quần thể (Population Parameter Estimates)")
