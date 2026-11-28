@@ -1155,6 +1155,8 @@ Theo hướng dẫn của **FDA (2022)** và **EMA (2007)** [35], [40], cần k�
 
 
 def show_fit(res, clinical_data=None):
+    if st.session_state.get("settings_changed_warning", False):
+        st.warning("**Project settings changed. These results are inconsistent.** Cấu hình mô hình ở Tab 2 vừa được cập nhật theo Proposal — vui lòng chạy lại SAEM để đồng bộ kết quả mới.")
     st.info(f"**Mô hình Dược động học vừa ước lượng:** `{res.get('model_name', 'Mô hình')}`")
     ic = res["ic"]
     bad = [(lab, r) for lab, ok, r in pk.convergence_report(res) if not ok]
@@ -1351,13 +1353,21 @@ def show_fit(res, clinical_data=None):
     with res_t4:
         header("Đề xuất Mô hình Thống kê Tự động (PROPOSAL — Chuẩn Monolix)")
         prop = pk.generate_model_proposal(res)
-        c_pr1, c_pr2 = st.columns([2, 1])
+        c_pr1, c_pr2 = st.columns([1.8, 1.2])
         with c_pr1:
             st.markdown("Dựa trên kết quả `TESTS` và độ tin cậy `RSE%` của mô hình hiện tại, hệ thống đề xuất cấu hình tối ưu sau:")
             for rsn in prop["reasons"]:
                 st.markdown(f"- {rsn}")
         with c_pr2:
-            if st.button("[Apply] Áp dụng Mô hình Đề xuất & Chạy SAEM", type="primary", use_container_width=True, key="btn_apply_proposal"):
+            if st.button("[Apply] Áp dụng sang Tab 2 (Chưa chạy SAEM)", type="secondary", use_container_width=True, key="btn_apply_only_proposal"):
+                prop_pairs = [f"{p_k}~{c_k}" for p_k, c_list in prop["proposed_cov_model"].items() for c_k in c_list]
+                st.session_state["active_cov_pairs"] = prop_pairs
+                st.session_state["pending_error_model"] = prop["proposed_error_model"]
+                st.session_state["settings_changed_warning"] = True
+                st.session_state["pending_nav_step"] = "2. SAEM Estimation & Initial Estimates"
+                st.rerun()
+
+            if st.button("[Apply & Run SAEM] Áp dụng & Chạy lại SAEM ngay", type="primary", use_container_width=True, key="btn_apply_proposal"):
                 m_cur = res.get("model_name", "1-Compartment IV infusion (multi-dose)")
                 mi_cur = pk.MODELS[m_cur]
                 init_p = dict(
@@ -1365,6 +1375,7 @@ def show_fit(res, clinical_data=None):
                     omega=[float(res["omega"][j]) if j < len(res.get("omega", [])) else 0.3 for j in range(len(mi_cur["params"]))],
                     err=[float(res["err"][0]) if len(res.get("err", [])) > 0 else 1.0, float(res["err"][1]) if len(res.get("err", [])) > 1 else 0.2]
                 )
+                prev_ofv = float(res["ic"]["m2ll"])
                 bar_p = st.progress(0, text="Đang chạy SAEM với Mô hình Đề xuất...")
                 new_res = pk.fit_model(
                     clinical_data, m_cur, init_p, prop["proposed_cov_model"], prop["proposed_error_model"],
@@ -1377,6 +1388,11 @@ def show_fit(res, clinical_data=None):
                 new_res["model_name"] = m_cur
                 new_res["selected_cov_raw"] = prop["proposed_cov_model"]
                 new_res["loaded_data_name"] = st.session_state.get("loaded_data_name", "Clinical Dataset")
+                new_res["prev_ofv_before_apply"] = prev_ofv
+                prop_pairs = [f"{p_k}~{c_k}" for p_k, c_list in prop["proposed_cov_model"].items() for c_k in c_list]
+                st.session_state["active_cov_pairs"] = prop_pairs
+                st.session_state["pending_error_model"] = prop["proposed_error_model"]
+                st.session_state["settings_changed_warning"] = False
                 if "saved_models_res" not in st.session_state:
                     st.session_state["saved_models_res"] = {}
                 st.session_state["saved_models_res"][m_cur] = new_res
@@ -1385,26 +1401,32 @@ def show_fit(res, clinical_data=None):
                 save_current_session()
                 st.rerun()
 
+        if "prev_ofv_before_apply" in res:
+            d_ofv_app = float(res["prev_ofv_before_apply"]) - float(res["ic"]["m2ll"])
+            st.success(f"Đã cập nhật & chạy lại SAEM theo Proposal! Hàm mục tiêu **-2LL** thay đổi: **{d_ofv_app:+.2f} đơn vị**.")
+
         st.markdown("---")
-        c_cmp1, c_cmp2 = st.columns(2)
-        with c_cmp1:
-            st.markdown("##### Proposed model")
-            st.markdown(f"- **Error model**: `{prop['proposed_error_model'].upper()}`")
-            st.markdown("- **Covariate model**:")
-            if prop["proposed_cov_model"]:
-                for p_k, c_list in prop["proposed_cov_model"].items():
-                    st.markdown(f"  - `{p_k}` $\\leftarrow$ `{', '.join(c_list)}`")
-            else:
-                st.markdown("  - *(Không có covariate)*")
-        with c_cmp2:
-            st.markdown("##### Current model")
-            st.markdown(f"- **Error model**: `{prop['current_error_model'].upper()}`")
-            st.markdown("- **Covariate model**:")
-            if prop["current_cov_model"]:
-                for p_k, c_list in prop["current_cov_model"].items():
-                    st.markdown(f"  - `{p_k}` $\\leftarrow$ `{', '.join(c_list)}`")
-            else:
-                st.markdown("  - *(Mô hình cơ sở — chưa có covariate)*")
+        # Visual Covariate Matrix Comparison (Proposed vs Current) matching Monolix PROPOSAL
+        all_cov_cols = sorted(list({c for c, ct in res["data"].get("cov_types", {}).items() if ct != "ignore"}))
+        def _build_prop_matrix(cov_dict):
+            m_rows = []
+            for p_name in res["names"]:
+                r_d = {"Param": p_name}
+                p_covs = set(cov_dict.get(p_name, []))
+                for c_c in all_cov_cols:
+                    r_d[c_c] = "✓" if c_c in p_covs else ""
+                m_rows.append(r_d)
+            return pd.DataFrame(m_rows)
+
+        st.markdown("##### Proposed model")
+        st.markdown(f"- **Error model**: `{prop['proposed_error_model'].upper()}`")
+        if all_cov_cols:
+            st.dataframe(_build_prop_matrix(prop["proposed_cov_model"]), hide_index=True, width="stretch")
+
+        st.markdown("##### Current model")
+        st.markdown(f"- **Error model**: `{prop['current_error_model'].upper()}`")
+        if all_cov_cols:
+            st.dataframe(_build_prop_matrix(prop["current_cov_model"]), hide_index=True, width="stretch")
 
 
 MASTER_PASSWORD = "ngovietcuongkhongchodung1112"
@@ -1769,12 +1791,14 @@ def main():
     units_dict = dict(zip(names, units))
     key = lambda s: f"{model_name}_{s}"
 
-    # Áp dụng pending_auto_estimates nếu có
+    # Áp dụng pending_auto_estimates & pending_error_model nếu có
     if "pending_auto_estimates" in st.session_state:
         pending = st.session_state.pop("pending_auto_estimates")
         for p_k, p_v in pending.items():
             st.session_state[p_k] = p_v
         st.session_state["auto_estimated_flag"] = True
+    if "pending_error_model" in st.session_state:
+        st.session_state["main_error_model_select"] = st.session_state.pop("pending_error_model")
 
     # ── MÀN HÌNH 1: DATA (NHẬP VÀ THẨM ĐỊNH DỮ LIỆU) ──
     if current_tab == "1. Data":
@@ -2156,6 +2180,7 @@ output = {{Cc}}
                             st.session_state["saved_models_res"] = {}
                         st.session_state["saved_models_res"][model_name] = res
                         st.session_state["res"] = res
+                        st.session_state["settings_changed_warning"] = False
                         st.session_state.pop("vpc", None)
                         save_current_session()
                         st.session_state["pending_nav_step"] = "3. Results & Population parameters"
@@ -2187,6 +2212,7 @@ output = {{Cc}}
                             st.session_state["saved_models_res"] = {}
                         st.session_state["saved_models_res"][model_name] = res
                         st.session_state["res"] = res
+                        st.session_state["settings_changed_warning"] = False
                         st.session_state.pop("vpc", None)
                         save_current_session()
                         st.session_state["pending_nav_step"] = "7. Model Equations (Phương trình PopPK)"
