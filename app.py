@@ -1335,12 +1335,14 @@ def main():
             phi_ind = res["phi_hat"][idx_sub:idx_sub + 1]
             phi_pop = pk.pop_mean_phi(res)[idx_sub:idx_sub + 1]
             
-            # Show individual parameters
-            c_ind = st.columns(4)
-            c_ind[0].metric("CL cá thể (L/h)", f"{float(np.exp(phi_ind[0, 0])):.2f}")
-            c_ind[1].metric("V cá thể (L)", f"{float(np.exp(phi_ind[0, 1])):.2f}")
-            c_ind[2].metric("η_CL", f"{float(phi_ind[0, 0] - phi_pop[0, 0]):.3f}")
-            c_ind[3].metric("η_V", f"{float(phi_ind[0, 1] - phi_pop[0, 1]):.3f}")
+            # Show individual parameters dynamically
+            num_params = len(res["names"])
+            c_ind = st.columns(min(num_params * 2, 8))
+            for j, p in enumerate(res["names"]):
+                col_idx = (j * 2) % len(c_ind)
+                c_ind[col_idx].metric(f"{p} cá thể", f"{float(np.exp(phi_ind[0, j])):.2f}")
+                if col_idx + 1 < len(c_ind):
+                    c_ind[col_idx + 1].metric(f"η_{p}", f"{float(phi_ind[0, j] - phi_pop[0, j]):.3f}")
 
             scale_ind = st.radio("Thang đo trục Y cá thể", ["Tuyến tính (Linear)", "Logarit (Semi-log)"], horizontal=True, key="scale_ind_choice")
 

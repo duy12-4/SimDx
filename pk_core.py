@@ -59,6 +59,163 @@ def model_mm(t, dose, V, Vmax, Km):
         return Km * np.exp(u)
 
 
+def model_2cpt_iv(t, dose, V1, CL, Q, V2):
+    """IV 2-ngăn đơn liều (bolus / truyền ngắn)."""
+    k10 = CL / np.maximum(V1, 1e-6)
+    k12 = Q / np.maximum(V1, 1e-6)
+    k21 = Q / np.maximum(V2, 1e-6)
+    S = k10 + k12 + k21
+    P = k10 * k21
+    disc = np.sqrt(np.maximum(S * S - 4 * P, 1e-30))
+    al = (S + disc) / 2.0
+    be = (S - disc) / 2.0
+    diff = np.where(np.abs(be - al) < 1e-9, 1e-9, be - al)
+    A = (k21 - al) / diff
+    B = (k21 - be) / (-diff)
+    return (dose / V1) * (A * np.exp(-al * t) + B * np.exp(-be * t))
+
+
+def solve_2cpt_iv_multidose(doses, default_tinf, t_obs, V1, CL, Q, V2):
+    """
+    Bộ giải đa liều giải tích chính xác cho 2-ngăn IV (Bolus và Infusion).
+    Áp dụng nguyên lý xếp chồng nồng độ giải tích (Analytical Superposition).
+    """
+    t_obs = np.asarray(t_obs, dtype=float)
+    scalar = (t_obs.ndim == 0)
+    if scalar:
+        t_obs = t_obs.reshape(1)
+    out = np.zeros(len(t_obs), dtype=float)
+    k10 = CL / max(V1, 1e-6)
+    k12 = Q / max(V1, 1e-6)
+    k21 = Q / max(V2, 1e-6)
+    S = k10 + k12 + k21
+    P = k10 * k21
+    disc = np.sqrt(max(S * S - 4.0 * P, 1e-30))
+    al = max((S + disc) / 2.0, 1e-9)
+    be = max((S - disc) / 2.0, 1e-9)
+    diff = be - al if abs(be - al) >= 1e-9 else 1e-9
+    A = (k21 - al) / diff
+    B = (k21 - be) / (-diff)
+    
+    for d in doses:
+        td = float(d[0])
+        amt = float(d[1])
+        ti = float(d[2]) if len(d) > 2 else float(default_tinf)
+        ti = max(ti, 0.001)
+        R = amt / ti
+        for i, to in enumerate(t_obs):
+            if to < td:
+                continue
+            dt = to - td
+            if dt <= ti:
+                term_a = (A / al) * (1.0 - np.exp(-al * dt))
+                term_b = (B / be) * (1.0 - np.exp(-be * dt))
+                out[i] += (R / V1) * (term_a + term_b)
+            else:
+                term_a = (A / al) * (1.0 - np.exp(-al * ti)) * np.exp(-al * (dt - ti))
+                term_b = (B / be) * (1.0 - np.exp(-be * ti)) * np.exp(-be * (dt - ti))
+                out[i] += (R / V1) * (term_a + term_b)
+    return out[0] if scalar else out
+
+
+def solve_1cpt_oral_multidose(doses, t_obs, ka, V, CL):
+    """Bộ giải đa liều giải tích chính xác cho 1-ngăn đường uống (Oral hấp thu bậc 1)."""
+    t_obs = np.asarray(t_obs, dtype=float)
+    scalar = (t_obs.ndim == 0)
+    if scalar:
+        t_obs = t_obs.reshape(1)
+    out = np.zeros(len(t_obs), dtype=float)
+    k = CL / max(V, 1e-6)
+    d = ka - k
+    for d_item in doses:
+        td, amt = float(d_item[0]), float(d_item[1])
+        for i, to in enumerate(t_obs):
+            if to < td:
+                continue
+            dt = to - td
+            if abs(d) < 1e-6:
+                out[i] += (amt * ka / V) * dt * np.exp(-k * dt)
+            else:
+                out[i] += (amt * ka / (V * d)) * (np.exp(-k * dt) - np.exp(-ka * dt))
+    return out[0] if scalar else out
+
+
+def solve_2cpt_oral_multidose(doses, t_obs, ka, V1, CL, Q, V2):
+    """Bộ giải đa liều giải tích chính xác cho 2-ngăn đường uống (Oral 2-cpt)."""
+    t_obs = np.asarray(t_obs, dtype=float)
+    scalar = (t_obs.ndim == 0)
+    if scalar:
+        t_obs = t_obs.reshape(1)
+    out = np.zeros(len(t_obs), dtype=float)
+    k10 = CL / max(V1, 1e-6)
+    k12 = Q / max(V1, 1e-6)
+    k21 = Q / max(V2, 1e-6)
+    S = k10 + k12 + k21
+    P = k10 * k21
+    disc = np.sqrt(max(S * S - 4.0 * P, 1e-30))
+    al = max((S + disc) / 2.0, 1e-9)
+    be = max((S - disc) / 2.0, 1e-9)
+    for r in (al, be):
+        if abs(ka - r) < 1e-5 * r:
+            ka = ka * (1.0 + 1e-4)
+    A = (k21 - al) / ((ka - al) * (be - al))
+    B = (k21 - be) / ((ka - be) * (al - be))
+    Cc = (k21 - ka) / ((al - ka) * (be - ka))
+    
+    for d_item in doses:
+        td, amt = float(d_item[0]), float(d_item[1])
+        for i, to in enumerate(t_obs):
+            if to < td:
+                continue
+            dt = to - td
+            val = (amt * ka / V1) * (A * np.exp(-al * dt) + B * np.exp(-be * dt) + Cc * np.exp(-ka * dt))
+            out[i] += max(0.0, val)
+    return out[0] if scalar else out
+
+
+def solve_mm_multidose(doses, t_obs, V, Vmax, Km):
+    """Bộ giải đa liều phi tuyến bão hòa Michaelis-Menten qua bước nhảy liều và nghiệm Lambert-W."""
+    t_obs = np.asarray(t_obs, dtype=float)
+    scalar = (t_obs.ndim == 0)
+    if scalar:
+        t_obs = t_obs.reshape(1)
+    if len(t_obs) == 0:
+        return np.zeros_like(t_obs)
+    t_sorted_idx = np.argsort(t_obs)
+    t_sorted = t_obs[t_sorted_idx]
+    
+    events = []
+    for d in doses:
+        events.append((float(d[0]), 'dose', float(d[1])))
+    for i, to in enumerate(t_sorted):
+        events.append((to, 'obs', i))
+    events.sort(key=lambda x: (x[0], 0 if x[1] == 'dose' else 1))
+    
+    out_sorted = np.zeros(len(t_obs), dtype=float)
+    t_curr = 0.0
+    c_curr = 0.0
+    
+    for te, etype, val in events:
+        dt = te - t_curr
+        if dt > 1e-9 and c_curr > 1e-9:
+            w0 = c_curr / max(Km, 1e-6)
+            x = w0 + np.log(max(w0, 1e-300)) - (Vmax / (max(V, 1e-6) * max(Km, 1e-6))) * dt
+            u = np.log(max(x, 1e-300)) if x > 1 else x
+            for _ in range(25):
+                eu = np.exp(np.clip(u, -100, 100))
+                u = u - (eu + u - x) / (eu + 1.0)
+            c_curr = max(0.0, Km * np.exp(np.clip(u, -100, 50)))
+        t_curr = te
+        if etype == 'dose':
+            c_curr += val / max(V, 1e-6)
+        elif etype == 'obs':
+            out_sorted[val] = c_curr
+            
+    out = np.zeros(len(t_obs), dtype=float)
+    out[t_sorted_idx] = out_sorted
+    return out[0] if scalar else out
+
+
 def solve_1cpt_infusion(doses, tinf, t_obs, cl_events, V, v_events=None):
     """
     Event-driven structural solver for 1-Compartment IV infusion with multi-dose,
@@ -162,6 +319,14 @@ MODELS = {
                                  defaults=[1.2, 15.0, 4.0, 8.0, 40.0],
                                  units=["1/h", "L", "L/h", "L/h", "L"],
                                  ranges=[(0.1, 5.0), (5.0, 50.0), (1.0, 20.0), (1.0, 30.0), (10.0, 150.0)]),
+    "2-Compartment (IV Infusion)": dict(fn=model_2cpt_iv, params=["V1", "CL", "Q", "V2"],
+                                        defaults=[15.0, 5.0, 8.0, 30.0],
+                                        units=["L", "L/h", "L/h", "L"],
+                                        ranges=[(5.0, 50.0), (0.5, 30.0), (1.0, 30.0), (10.0, 150.0)]),
+    "2-Compartment (IV Bolus)": dict(fn=model_2cpt_iv, params=["V1", "CL", "Q", "V2"],
+                                     defaults=[15.0, 5.0, 8.0, 30.0],
+                                     units=["L", "L/h", "L/h", "L"],
+                                     ranges=[(5.0, 50.0), (0.5, 30.0), (1.0, 30.0), (10.0, 150.0)]),
     "Michaelis-Menten": dict(fn=model_mm, params=["V", "Vmax", "Km"],
                              defaults=[20.0, 10.0, 2.0], units=["L", "mg/h", "mg/L"],
                              ranges=[(5.0, 50.0), (1.0, 50.0), (0.1, 20.0)]),
@@ -174,7 +339,9 @@ MODELS = {
 def predict(model_name, t, dose, phi, data=None, sub_doses=None, sub_cov=None,
             beta=None, cov_model=None, cov_mode="time-varying", tinf=1.0, subject_ids=None):
     """phi [M,P] = log tham số cá thể. Trả về [M,T]; giá trị không hữu hạn -> 0 / 1e30."""
-    if model_name == "1-Compartment IV infusion (multi-dose)":
+    has_sub_doses = (sub_doses is not None) or (data is not None and "sub_doses" in data)
+    
+    if has_sub_doses or model_name == "1-Compartment IV infusion (multi-dose)":
         M = phi.shape[0]
         T = t.shape[1] if hasattr(t, "shape") and t.ndim > 1 else len(t)
         out = np.zeros((M, T), dtype=float)
@@ -218,48 +385,88 @@ def predict(model_name, t, dose, phi, data=None, sub_doses=None, sub_cov=None,
                 d_val = float(dose[m, 0] if hasattr(dose, 'shape') and dose.ndim > 1 else (dose[m] if hasattr(dose, '__len__') else dose))
                 d_list = [(0.0, d_val, default_tinf)]
                 
-            phi_cl = phi[m, 0]
-            phi_v = phi[m, 1]
-            V_val = float(np.exp(phi_v))
-            
             t_row = t[m] if hasattr(t, "shape") and t.ndim > 1 else t
             
-            cl_events = float(np.exp(phi_cl))
+            if model_name == "1-Compartment IV infusion (multi-dose)":
+                phi_cl = phi[m, 0]
+                phi_v = phi[m, 1]
+                V_val = float(np.exp(phi_v))
+                cl_events = float(np.exp(phi_cl))
+                
+                if active_cov_mode == "time-varying" and data is not None and "sub_cov_events" in data:
+                    cl_covs = cov_model.get("CL", []) if cov_model else []
+                    beta_cl = None
+                    if beta is not None and len(beta) > 0 and len(beta[0]) > 1:
+                        beta_cl = beta[0][1:]
+                        
+                    if "CLCr_CG" in cl_covs:
+                        if sid not in data["sub_cov_events"]:
+                            raise KeyError(f"Subject {sid} not found in data['sub_cov_events']")
+                        if "CLCr_CG" in data["sub_cov_events"][sid]:
+                            events = data["sub_cov_events"][sid]["CLCr_CG"]
+                            if events:
+                                if "CLCr_CG" not in ref_medians:
+                                    raise KeyError("Missing reference median for 'CLCr_CG' in data['ref_medians']")
+                                ref_val = float(ref_medians["CLCr_CG"])
+                                
+                                if beta_cl is None:
+                                    raise ValueError("Missing beta coefficient for covariate 'CLCr_CG'")
+                                cov_idx = cl_covs.index("CLCr_CG")
+                                if cov_idx >= len(beta_cl):
+                                    raise ValueError(f"Beta coefficient for 'CLCr_CG' at index {cov_idx} missing from beta_cl (length {len(beta_cl)})")
+                                b_coef = float(beta_cl[cov_idx])
+                                
+                                base_val = events[0][1]
+                                base_shift = b_coef * np.log(base_val / ref_val)
+                                cl_events = []
+                                for te, ve in events:
+                                    curr_shift = b_coef * np.log(ve / ref_val)
+                                    cl_k = float(np.exp(phi_cl + (curr_shift - base_shift)))
+                                    cl_events.append((te, cl_k))
+                                
+                c_pred = solve_1cpt_infusion(d_list, default_tinf, t_row, cl_events, V_val)
+                out[m, :] = c_pred
             
-            if active_cov_mode == "time-varying" and data is not None and "sub_cov_events" in data:
-                cl_covs = cov_model.get("CL", []) if cov_model else []
-                beta_cl = None
-                if beta is not None and len(beta) > 0 and len(beta[0]) > 1:
-                    beta_cl = beta[0][1:]
+            elif model_name == "1-Compartment (IV Bolus)":
+                V_val = float(np.exp(phi[m, 0]))
+                CL_val = float(np.exp(phi[m, 1]))
+                out[m, :] = solve_1cpt_infusion(d_list, 0.01, t_row, CL_val, V_val)
+                
+            elif model_name in ["2-Compartment (IV Infusion)", "2-Compartment (IV Bolus)"]:
+                V1_val = float(np.exp(phi[m, 0]))
+                CL_val = float(np.exp(phi[m, 1]))
+                Q_val = float(np.exp(phi[m, 2]))
+                V2_val = float(np.exp(phi[m, 3]))
+                tinf_use = 0.01 if "Bolus" in model_name else default_tinf
+                out[m, :] = solve_2cpt_iv_multidose(d_list, tinf_use, t_row, V1_val, CL_val, Q_val, V2_val)
+                
+            elif model_name == "1-Compartment (Oral)":
+                ka_val = float(np.exp(phi[m, 0]))
+                V_val = float(np.exp(phi[m, 1]))
+                CL_val = float(np.exp(phi[m, 2]))
+                out[m, :] = solve_1cpt_oral_multidose(d_list, t_row, ka_val, V_val, CL_val)
+                
+            elif model_name == "2-Compartment (Oral)":
+                ka_val = float(np.exp(phi[m, 0]))
+                V1_val = float(np.exp(phi[m, 1]))
+                CL_val = float(np.exp(phi[m, 2]))
+                Q_val = float(np.exp(phi[m, 3]))
+                V2_val = float(np.exp(phi[m, 4]))
+                out[m, :] = solve_2cpt_oral_multidose(d_list, t_row, ka_val, V1_val, CL_val, Q_val, V2_val)
+                
+            elif model_name == "Michaelis-Menten":
+                V_val = float(np.exp(phi[m, 0]))
+                Vmax_val = float(np.exp(phi[m, 1]))
+                Km_val = float(np.exp(phi[m, 2]))
+                out[m, :] = solve_mm_multidose(d_list, t_row, V_val, Vmax_val, Km_val)
+                
+            else:
+                m_info = MODELS.get(model_name)
+                if m_info and m_info.get("fn"):
+                    kw = {p: np.exp(phi[m:m+1, [j]]) for j, p in enumerate(m_info["params"])}
+                    d_val = float(d_list[0][1]) if d_list else float(dose[m])
+                    out[m, :] = m_info["fn"](t_row[None, :], d_val, **kw)[0]
                     
-                if "CLCr_CG" in cl_covs:
-                    if sid not in data["sub_cov_events"]:
-                        raise KeyError(f"Subject {sid} not found in data['sub_cov_events']")
-                    if "CLCr_CG" in data["sub_cov_events"][sid]:
-                        events = data["sub_cov_events"][sid]["CLCr_CG"]
-                        if events:
-                            if "CLCr_CG" not in ref_medians:
-                                raise KeyError("Missing reference median for 'CLCr_CG' in data['ref_medians']")
-                            ref_val = float(ref_medians["CLCr_CG"])
-                            
-                            if beta_cl is None:
-                                raise ValueError("Missing beta coefficient for covariate 'CLCr_CG'")
-                            cov_idx = cl_covs.index("CLCr_CG")
-                            if cov_idx >= len(beta_cl):
-                                raise ValueError(f"Beta coefficient for 'CLCr_CG' at index {cov_idx} missing from beta_cl (length {len(beta_cl)})")
-                            b_coef = float(beta_cl[cov_idx])
-                            
-                            base_val = events[0][1]
-                            base_shift = b_coef * np.log(base_val / ref_val)
-                            cl_events = []
-                            for te, ve in events:
-                                curr_shift = b_coef * np.log(ve / ref_val)
-                                cl_k = float(np.exp(phi_cl + (curr_shift - base_shift)))
-                                cl_events.append((te, cl_k))
-                            
-            c_pred = solve_1cpt_infusion(d_list, default_tinf, t_row, cl_events, V_val)
-            out[m, :] = c_pred
-            
         return np.nan_to_num(out, nan=0.0, posinf=1e30, neginf=0.0)
 
     m = MODELS[model_name]
