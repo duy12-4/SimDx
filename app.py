@@ -889,6 +889,12 @@ def render_poppk_equations_tab(res, clinical_data=None):
         st.markdown("---")
         st.markdown("##### Phương trình Số thực tế của Mô hình vừa Ước lượng bằng SAEM:")
         has_cov = any(len(cov_model.get(p, [])) > 0 for p in names)
+        if res.get("scm_history"):
+            d_ofv_tot = float(res.get("delta_ofv_total", 0.0))
+            st.success(f"**Mô hình Cuối cùng (Auto-SCM Final Model):** Đã tự động sàng lọc EBE và kiểm định từng bước Forward ($p < 0.05$) + Backward ($p < 0.01$), giúp giảm $-2LL$ được **{d_ofv_tot:.2f} đơn vị** so với Mô hình Cơ sở.")
+            with st.expander("Xem Bảng các bước xây dựng mô hình (Auto-SCM History — tương đương Phụ lục 8)", expanded=False):
+                st.dataframe(pd.DataFrame(res["scm_history"]), width="stretch")
+
         if has_cov:
             st.info("Phương trình được tính toán động 100% từ kết quả ước lượng SAEM và các hiệu ứng covariate (liên tục & phân loại/gen) hiện tại:")
         else:
@@ -1951,7 +1957,11 @@ output = {{Cc}}
                     n_chains = c_saem3.slider("Chains", 1, 3, 1, key="main_chains")
                     fit_seed = c_saem4.number_input("Seed", 0, 9999, 42, key="main_seed")
 
-                    if st.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main"):
+                    c_run1, c_run2 = st.columns(2)
+                    run_saem_clicked = c_run1.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main")
+                    run_scm_clicked = c_run2.button("Tự động Tìm Covariate (Auto-SCM) & Hoàn thiện Phương trình", type="secondary", use_container_width=True, key="btn_run_auto_scm_main", help="Tự động sàng lọc EBE và chạy Forward (p<0.05) + Backward (p<0.01) để tìm mô hình Covariate tối ưu nhất")
+
+                    if run_saem_clicked:
                         init = dict(
                             mu=np.log([st.session_state.get(key(f"pop_{p}"), mi["defaults"][j]) for j, p in enumerate(names)]),
                             omega=[st.session_state.get(key(f"om_{p}"), 0.3) for p in names],
@@ -1980,6 +1990,33 @@ output = {{Cc}}
                         st.session_state.pop("vpc", None)
                         save_current_session()
                         st.session_state["pending_nav_step"] = "3. Results & Population parameters"
+                        st.rerun()
+
+                    if run_scm_clicked:
+                        init = dict(
+                            mu=np.log([st.session_state.get(key(f"pop_{p}"), mi["defaults"][j]) for j, p in enumerate(names)]),
+                            omega=[st.session_state.get(key(f"om_{p}"), 0.3) for p in names],
+                            err=[float(st.session_state.get("main_sigma_a", 1.0)), float(st.session_state.get("main_sigma_b", 0.2))]
+                        )
+                        cov_mode_run = st.session_state.get("main_cov_mode", "time-varying")
+                        err_model_run = st.session_state.get("main_error_model_select", "combined")
+                        bar = st.progress(0, text="Đang chạy Auto-SCM sàng lọc toàn bộ Covariates...")
+                        res = pk.run_auto_scm(
+                            clinical_data, model_name, init, error_model=err_model_run,
+                            cov_mode=cov_mode_run, seed=int(fit_seed),
+                            progress=lambda x, m="": bar.progress(min(max(float(x), 0.0), 1.0), text=m or f"Auto-SCM {x:.0%}")
+                        )
+                        bar.empty()
+                        res["clinical_data"] = clinical_data
+                        res["model_name"] = model_name
+                        res["loaded_data_name"] = st.session_state.get("loaded_data_name", "Clinical Dataset")
+                        if "saved_models_res" not in st.session_state:
+                            st.session_state["saved_models_res"] = {}
+                        st.session_state["saved_models_res"][model_name] = res
+                        st.session_state["res"] = res
+                        st.session_state.pop("vpc", None)
+                        save_current_session()
+                        st.session_state["pending_nav_step"] = "7. Model Equations (Phương trình PopPK)"
                         st.rerun()
 
                 # ── CỘT PHẢI: THANH ĐIỀU KHIỂN ƯỚC LƯỢNG THAM SỐ KHỞI TẠO (INITIAL ESTIMATES PANEL) ──
@@ -2210,6 +2247,38 @@ output = {{Cc}}
                         st.plotly_chart(fig_dc, width="stretch")
 
             header("Bảng So sánh Mô hình Từng bước (Stepwise Covariate Modeling - SCM)")
+            if st.button("Chạy Tự động Sàng lọc Covariate (Auto-SCM) trên Tập dữ liệu hiện tại", type="primary", key="btn_run_auto_scm_tab6"):
+                m_cur = res.get("model_name", model_name)
+                mi_cur = pk.MODELS[m_cur]
+                init_scm = dict(
+                    mu=np.log([float(np.exp(res["beta"][j][0])) if j < len(res.get("beta", [])) else mi_cur["defaults"][j] for j in range(len(mi_cur["params"]))]),
+                    omega=[float(res["omega"][j]) if j < len(res.get("omega", [])) else 0.3 for j in range(len(mi_cur["params"]))],
+                    err=[float(res["err"][0]) if len(res.get("err", [])) > 0 else 1.0, float(res["err"][1]) if len(res.get("err", [])) > 1 else 0.2]
+                )
+                is_base = not any(len(v) > 0 for v in res.get("cov_model", {}).values())
+                bar_scm = st.progress(0, text="Đang chạy Auto-SCM...")
+                new_res = pk.run_auto_scm(
+                    clinical_data, m_cur, init_scm, error_model=res.get("error_model", "combined"),
+                    cov_mode=res.get("cov_mode", "time-varying"), seed=42,
+                    base_res=res if is_base else None,
+                    progress=lambda x, m="": bar_scm.progress(min(max(float(x), 0.0), 1.0), text=m or f"Auto-SCM {x:.0%}")
+                )
+                bar_scm.empty()
+                new_res["clinical_data"] = clinical_data
+                new_res["model_name"] = m_cur
+                new_res["loaded_data_name"] = st.session_state.get("loaded_data_name", "Clinical Dataset")
+                if "saved_models_res" not in st.session_state:
+                    st.session_state["saved_models_res"] = {}
+                st.session_state["saved_models_res"][m_cur] = new_res
+                st.session_state["res"] = new_res
+                st.session_state.pop("vpc", None)
+                save_current_session()
+                st.rerun()
+
+            if res.get("scm_history"):
+                st.success(f"Kết quả Auto-SCM trên tập dữ liệu hiện tại: Giảm **-2LL = {res.get('delta_ofv_total', 0.0):.2f} đơn vị** ($p < 0.01$). Xem phương trình hoàn chỉnh tại **Tab 7. Model Equations**.")
+                st.dataframe(pd.DataFrame(res["scm_history"]), width="stretch")
+
             cov_summary_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "validation", "covariate_analysis.csv"))
             is_standard_vanco = (clinical_data is not None and clinical_data.get("N", 0) == 83 and clinical_data.get("nobs", 0) == 278)
             if is_standard_vanco and os.path.exists(cov_summary_path):
@@ -2219,7 +2288,6 @@ output = {{Cc}}
                 with st.expander("Tham khảo Benchmark: Bảng SCM trên tập dữ liệu chuẩn Vancomycin 83 BN", expanded=False):
                     cov_df = pd.read_csv(cov_summary_path)
                     st.dataframe(cov_df, width="stretch")
-                st.info("Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
 
             header("Thẩm định Mô hình bằng Visual Predictive Check (VPC)")
             c1, c2, c3 = st.columns([1, 1, 1])

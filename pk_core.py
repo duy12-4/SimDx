@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from scipy.special import logsumexp
-from scipy.stats import norm, t as student_t
+from scipy.stats import norm, t as student_t, chi2, linregress, f_oneway
 
 LOG2PI = np.log(2 * np.pi)
 COVARIATES = ["WT", "AGE", "SEX"]
@@ -1327,3 +1327,195 @@ def fit_model(df, model_name, init, cov_model, error_model="combined", n_iter1=2
     res["fim"] = compute_fim(res, res["phi_hat"])
     res["diag"] = compute_diagnostics(res, res["phi_hat"])
     return res
+
+
+def run_auto_scm(df, model_name, init, error_model="combined", cov_mode="time-varying",
+                 p_forward=0.05, p_backward=0.01, seed=42, base_res=None, progress=None):
+    """
+    Tự động sàng lọc và xây dựng mô hình Covariate tối ưu (Stepwise Covariate Modeling - SCM):
+    1. Chạy (hoặc dùng lại) Base Model để lấy -2LL (OFV) và EBE (eta_hat).
+    2. Tiền sàng lọc tương quan giữa eta_hat và toàn bộ các biến đồng ảnh hưởng (Continuous + Categorical/GEN).
+    3. Forward Inclusion (p < 0.05, dOFV > 3.84 cho 1 df).
+    4. Backward Elimination (p < 0.01, dOFV > 6.63 cho 1 df).
+    5. Chạy SAEM chuẩn xác cao trên Final Covariate Model.
+    """
+    def _prog(frac, msg=""):
+        if progress is not None:
+            try:
+                progress(frac, msg)
+            except TypeError:
+                progress(frac)
+
+    _prog(0.05, "Đang chuẩn bị Base Model & EBE...")
+    if base_res is None:
+        base_res = fit_model(df, model_name, init, {}, error_model=error_model,
+                             n_iter1=120, n_iter2=60, n_chains=1, seed=seed, n_is=800, cov_mode=cov_mode)
+    base_ofv = float(base_res["ic"]["m2ll"])
+    data = base_res["data"]
+    names = MODELS[model_name]["params"]
+    cov_types = data.get("cov_types", data.get("detected_covariates", {}))
+    cat_info = data.get("cat_info", {})
+    bdf = data["baseline_cov"]
+
+    # 1. EBE-Covariate Pre-screening
+    _prog(0.15, "Đang sàng lọc tương quan EBE - Covariate...")
+    pop_phi = pop_mean_phi(base_res)
+    etas = base_res["phi_hat"] - pop_phi
+
+    candidates = []
+    for j, p in enumerate(names):
+        eta_p = etas[:, j]
+        for c, ctype in cov_types.items():
+            if ctype == "ignore":
+                continue
+            col_key = c if c in bdf.columns else (f"{c}_base" if f"{c}_base" in bdf.columns else None)
+            if col_key is None:
+                continue
+            df_c = 1
+            pval = 1.0
+            if ctype == "continuous":
+                xv = pd.to_numeric(bdf[col_key], errors="coerce").values.astype(float)
+                valid = np.isfinite(xv) & np.isfinite(eta_p)
+                if valid.sum() > 5 and np.std(xv[valid]) > 1e-8:
+                    lr = linregress(xv[valid], eta_p[valid])
+                    pval = float(lr.pvalue)
+            elif ctype == "categorical":
+                cats = bdf[col_key].fillna("NA").astype(str).str.replace(r"\.0$", "", regex=True)
+                grps = [eta_p[(cats == lvl).values] for lvl in cats.unique() if (cats == lvl).sum() >= 2]
+                if len(grps) >= 2:
+                    _, pval = f_oneway(*grps)
+                    pval = float(pval) if np.isfinite(pval) else 1.0
+                    df_c = max(len(cat_info.get(c, {}).get("dummies", [])), 1)
+            if pval < 0.25:
+                candidates.append((pval, p, c, df_c))
+
+    candidates.sort(key=lambda x: x[0])
+    # Fallback: if no candidate < 0.25, test top physiological pairs if present
+    if not candidates:
+        for p, c in [("CL", "CLCr_CG"), ("V", "TBW"), ("CL", "Age"), ("CL", "Sepsis"), ("CL", "GEN")]:
+            if p in names and c in cov_types and cov_types[c] != "ignore":
+                df_c = max(len(cat_info.get(c, {}).get("dummies", [])), 1)
+                candidates.append((0.5, p, c, df_c))
+    candidates = candidates[:8]
+
+    def _fit_fast(cov_m):
+        return fit_model(df, model_name, init, cov_m, error_model=error_model,
+                         n_iter1=90, n_iter2=45, n_chains=1, seed=seed, n_is=600, cov_mode=cov_mode)
+
+    def _df_for_pair(c):
+        return max(len(cat_info.get(c, {}).get("dummies", [])), 1)
+
+    scm_history = [{
+        "Bước": "Base Model",
+        "Mô hình": "Không có Covariate",
+        "-2LL (OFV)": round(base_ofv, 2),
+        "ΔOFV": 0.0,
+        "p-value": "—",
+        "Quyết định": "Mô hình tham chiếu"
+    }]
+
+    # 2. Forward Inclusion (p < p_forward)
+    curr_cov = {}
+    curr_ofv = base_ofv
+    remaining = [(p, c, df_c) for _, p, c, df_c in candidates]
+    step_idx = 1
+
+    while remaining:
+        _prog(min(0.20 + 0.08 * step_idx, 0.70), f"Forward Inclusion vòng {step_idx}...")
+        best_gain = -1.0
+        best_cand = None
+        best_ofv = curr_ofv
+        best_crit = 3.841
+
+        for p, c, df_c in remaining:
+            test_cov = {k: list(v) for k, v in curr_cov.items()}
+            test_cov.setdefault(p, []).append(c)
+            try:
+                r_test = _fit_fast(test_cov)
+                ofv_t = float(r_test["ic"]["m2ll"])
+                gain = curr_ofv - ofv_t
+                crit = float(chi2.ppf(1.0 - p_forward, df_c))
+                if gain > best_gain:
+                    best_gain = gain
+                    best_cand = (p, c, df_c)
+                    best_ofv = ofv_t
+                    best_crit = crit
+            except Exception:
+                continue
+
+        if best_cand is not None and best_gain > best_crit:
+            p, c, df_c = best_cand
+            curr_cov.setdefault(p, []).append(c)
+            remaining = [x for x in remaining if not (x[0] == p and x[1] == c)]
+            pval_step = float(1.0 - chi2.cdf(best_gain, df_c))
+            scm_history.append({
+                "Bước": f"Forward {step_idx}",
+                "Mô hình": f"+ {p}~{c}",
+                "-2LL (OFV)": round(best_ofv, 2),
+                "ΔOFV": round(-best_gain, 2),
+                "p-value": f"{pval_step:.4g}",
+                "Quyết định": f"Giữ lại (ΔOFV={best_gain:.2f} > {best_crit:.2f})"
+            })
+            curr_ofv = best_ofv
+            step_idx += 1
+        else:
+            break
+
+    # 3. Backward Elimination (p < p_backward)
+    b_step = 1
+    while any(len(v) > 0 for v in curr_cov.values()):
+        _prog(min(0.72 + 0.05 * b_step, 0.85), f"Backward Elimination vòng {b_step}...")
+        active_pairs = [(p, c) for p, clist in curr_cov.items() for c in clist]
+        if len(active_pairs) == 0:
+            break
+        worst_loss = np.inf
+        worst_pair = None
+        worst_ofv = curr_ofv
+        worst_crit = 6.635
+
+        for p, c in active_pairs:
+            test_cov = {k: [x for x in v if not (k == p and x == c)] for k, v in curr_cov.items()}
+            test_cov = {k: v for k, v in test_cov.items() if v}
+            try:
+                r_test = _fit_fast(test_cov)
+                ofv_t = float(r_test["ic"]["m2ll"])
+                loss = ofv_t - curr_ofv
+                df_c = _df_for_pair(c)
+                crit = float(chi2.ppf(1.0 - p_backward, df_c))
+                if loss < worst_loss:
+                    worst_loss = loss
+                    worst_pair = (p, c, df_c)
+                    worst_ofv = ofv_t
+                    worst_crit = crit
+            except Exception:
+                continue
+
+        if worst_pair is not None and worst_loss < worst_crit:
+            p, c, df_c = worst_pair
+            curr_cov[p] = [x for x in curr_cov[p] if x != c]
+            if not curr_cov[p]:
+                del curr_cov[p]
+            pval_step = float(1.0 - chi2.cdf(max(worst_loss, 0.0), df_c))
+            scm_history.append({
+                "Bước": f"Backward {b_step}",
+                "Mô hình": f"- {p}~{c}",
+                "-2LL (OFV)": round(worst_ofv, 2),
+                "ΔOFV": round(worst_loss, 2),
+                "p-value": f"{pval_step:.4g}",
+                "Quyết định": f"Loại bỏ (ΔOFV={worst_loss:.2f} < {worst_crit:.2f})"
+            })
+            curr_ofv = worst_ofv
+            b_step += 1
+        else:
+            break
+
+    # 4. Final High-Precision SAEM Fit
+    _prog(0.90, "Đang chạy SAEM chính xác cao cho Mô hình Cuối cùng...")
+    final_res = fit_model(df, model_name, init, curr_cov, error_model=error_model,
+                          n_iter1=200, n_iter2=100, n_chains=1, seed=seed, n_is=1500, cov_mode=cov_mode)
+    final_res["selected_cov_raw"] = curr_cov
+    final_res["scm_history"] = scm_history
+    final_res["base_ofv"] = base_ofv
+    final_res["delta_ofv_total"] = round(base_ofv - float(final_res["ic"]["m2ll"]), 2)
+    _prog(1.0, "Hoàn tất Auto-SCM!")
+    return final_res
