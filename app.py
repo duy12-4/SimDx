@@ -1394,15 +1394,14 @@ def main():
             st.rerun()
 
     # ── GIAO DIỆN CHUẨN MONOLIX THEO QUY TRÌNH 4 BƯỚC ──
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "1. Data",
         "2. Structural model & Initial estimates",
         "3. SAEM Estimation",
         "4. Results & Population parameters",
         "5. Diagnostic Plots (GOF)",
         "6. Individual fits (EBE)",
-        "7. Monolix Benchmark",
-        "8. Covariates & Simulx"
+        "7. Covariates & Simulx"
     ])
 
     res = st.session_state.get("res")
@@ -1693,62 +1692,8 @@ output = {{Cc}}
             st.download_button("Tải file CSV Thông số Cá thể (individual_parameters.csv)",
                                csv_ebe, "individual_parameters.csv", "text/csv", key="btn_download_ebe_csv")
 
-    # ── TAB 7: KIỂM CHUẨN MONOLIX 2024 (HEAD-TO-HEAD BENCHMARK) ──
+    # ── TAB 7: SÀNG LỌC COVARIATE & MÔ PHỎNG SIMULX ──
     with tab7:
-        header("Kiểm chuẩn Đối đầu Trực tiếp với Monolix 2024R1 (Head-to-Head Benchmark)")
-        target_data = clinical_data if clinical_data is not None else df_sim
-        is_installed = me.is_monolix_installed()
-        
-        if is_installed:
-            st.success("MonolixSuite 2024R1 đã được phát hiện tại: `/Applications/MonolixSuite2024R1.app`")
-        else:
-            st.info("Monolix chưa được cài đặt ở đường dẫn mặc định trên macOS. Bạn vẫn có thể chỉ định thư mục kết quả Monolix để đối chiếu.")
-
-        c_bm1, c_bm2 = st.columns([1, 1])
-        default_mlx_proj = "/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran") else ""
-        mlx_proj_path = c_bm1.text_input("Đường dẫn file dự án Monolix (.mlxtran)", value=default_mlx_proj, key="mlx_proj_input")
-        default_mlx_dir = "/Users/macbook/Documents/Mô hình 2 ngăn" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn") else ""
-        mlx_export_dir = c_bm2.text_input("Thư mục kết quả xuất Monolix", value=default_mlx_dir, key="mlx_dir_input")
-
-        col_b1, col_b2 = st.columns(2)
-        btn_run_mlx = col_b1.button("Chạy Monolix 2024 CLI Ngầm (--no-gui)", disabled=not is_installed, type="primary", use_container_width=True)
-        btn_load_mlx = col_b2.button("Tải & So sánh Kết quả Monolix", type="secondary", use_container_width=True)
-
-        if btn_run_mlx:
-            if not os.path.exists(mlx_proj_path):
-                st.error(f"Không tìm thấy file dự án: {mlx_proj_path}")
-            else:
-                with st.spinner("Đang chạy Monolix 2024R1 ở chế độ dòng lệnh ngầm..."):
-                    ok, out, err = me.run_monolix_project(mlx_proj_path)
-                    if ok:
-                        st.success("Monolix đã hoàn thành tính toán thành công!")
-                    else:
-                        st.warning(f"Monolix chạy xong với thông báo: {err or out}")
-
-        if res is None:
-            st.info("Hãy chạy SAEM ở Bước 3 trước để có kết quả SimDx đối chiếu trực tiếp với Monolix.")
-        else:
-            if os.path.exists(mlx_export_dir):
-                df_comp, df_ic = me.build_benchmark_comparison(res, mlx_export_dir)
-                if df_comp is not None:
-                    header("Bảng So sánh Tham số Đối đầu: Monolix 2024R1 vs SimDx")
-                    st.dataframe(df_comp, width="stretch")
-                    
-                    if df_ic is not None:
-                        header("So sánh Tiêu chuẩn Hàm Mục tiêu & Thông tin")
-                        st.dataframe(df_ic, width="stretch")
-
-                    csv_report = df_comp.to_csv(index=False)
-                    st.download_button("Tải Báo cáo Kiểm chuẩn CSV (benchmark_monolix_simdx.csv)",
-                                       csv_report, "benchmark_monolix_simdx.csv", "text/csv",
-                                       key="btn_download_bm_csv")
-                else:
-                    st.warning("Chưa tìm thấy file populationParameters.txt trong thư mục Monolix chỉ định.")
-            else:
-                st.warning("Thư mục kết quả Monolix không tồn tại. Vui lòng kiểm tra lại đường dẫn.")
-
-    # ── TAB 8: SÀNG LỌC COVARIATE & MÔ PHỎNG SIMULX ──
-    with tab8:
         header("Sàng lọc Covariate & Mô hình Tối ưu (Covariate Search & SCM)")
         if res is None:
             st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
