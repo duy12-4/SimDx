@@ -1390,6 +1390,10 @@ def show_fit(res, clinical_data=None):
         header("Đề xuất Mô hình Thống kê Tự động (PROPOSAL — Conditional Distribution & BICc)")
         st.caption("Đánh giá nhanh toàn bộ các mô hình thay thế bằng các mẫu từ phân phối có điều kiện (Conditional Distribution) để tránh hiện tượng co cụm (shrinkage) và chọn mô hình có BICc thấp nhất.")
         prop = pk.generate_model_proposal(res)
+        if "error_table" not in prop:
+            import importlib
+            importlib.reload(pk)
+            prop = pk.generate_model_proposal(res)
 
         pr_sub1, pr_sub2, pr_sub3, pr_sub4 = st.tabs([
             "PROPOSED MODEL",
@@ -1475,17 +1479,20 @@ def show_fit(res, clinical_data=None):
 
         with pr_sub2:
             st.markdown("##### So sánh 4 Mô hình Sai số bằng MLE trên Conditional Distribution (Xếp hạng theo BICc):")
-            st.dataframe(prop["error_table"], hide_index=True, width="stretch")
+            if prop.get("error_table") is not None:
+                st.dataframe(prop["error_table"], hide_index=True, width="stretch")
 
         with pr_sub3:
             st.markdown("##### Hồi quy Từng bước (Stepwise Linear Regression) theo BICc trên các mẫu Conditional Distribution:")
             st.caption("Tự động loại trừ đa cộng tuyến bằng tiêu chuẩn BICc trên phân phối hậu nghiệm.")
-            st.dataframe(prop["cov_steps_table"], hide_index=True, width="stretch")
+            if prop.get("cov_steps_table") is not None:
+                st.dataframe(prop["cov_steps_table"], hide_index=True, width="stretch")
 
         with pr_sub4:
             st.markdown("##### Kiểm định Tương quan Phần dư Ngẫu nhiên (sau khi loại bỏ ảnh hưởng Covariates):")
-            if not prop["corr_table"].empty:
-                st.dataframe(prop["corr_table"], hide_index=True, width="stretch")
+            corr_tbl = prop.get("corr_table")
+            if corr_tbl is not None and not corr_tbl.empty:
+                st.dataframe(corr_tbl, hide_index=True, width="stretch")
             else:
                 st.info("Cần từ 2 tham số PK trở lên để kiểm định tương quan phần dư.")
 
