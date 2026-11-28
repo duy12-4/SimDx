@@ -1478,18 +1478,36 @@ def show_fit(res, clinical_data=None):
                 st.dataframe(_build_prop_matrix(prop["current_cov_model"]), hide_index=True, width="stretch")
 
         with pr_sub2:
-            st.markdown("##### So sánh 4 Mô hình Sai số bằng MLE trên Conditional Distribution (Xếp hạng theo BICc):")
+            c_em1, c_em2 = st.columns([2.2, 1.0])
+            c_em1.markdown("##### So sánh 4 Mô hình Sai số bằng MLE trên Conditional Distribution (Xếp hạng theo BICc):")
+            if c_em2.button("[Apply Error Model] Chỉ áp dụng Error Model", type="secondary", use_container_width=True, key="btn_apply_err_only"):
+                st.session_state["pending_error_model"] = prop["proposed_error_model"]
+                st.session_state["settings_changed_warning"] = True
+                st.session_state["pending_nav_step"] = "2. SAEM Estimation & Initial Estimates"
+                st.rerun()
             if prop.get("error_table") is not None:
                 st.dataframe(prop["error_table"], hide_index=True, width="stretch")
 
         with pr_sub3:
-            st.markdown("##### Hồi quy Từng bước (Stepwise Linear Regression) theo BICc trên các mẫu Conditional Distribution:")
+            c_cm1, c_cm2 = st.columns([2.2, 1.0])
+            c_cm1.markdown("##### Hồi quy Từng bước (Stepwise Linear Regression) theo BICc trên Conditional Distribution:")
+            if c_cm2.button("[Apply Covariate Model] Chỉ áp dụng Covariates", type="secondary", use_container_width=True, key="btn_apply_cov_only"):
+                prop_pairs = [f"{p_k}~{c_k}" for p_k, c_list in prop["proposed_cov_model"].items() for c_k in c_list]
+                st.session_state["active_cov_pairs"] = prop_pairs
+                st.session_state["settings_changed_warning"] = True
+                st.session_state["pending_nav_step"] = "2. SAEM Estimation & Initial Estimates"
+                st.rerun()
             st.caption("Tự động loại trừ đa cộng tuyến bằng tiêu chuẩn BICc trên phân phối hậu nghiệm.")
             if prop.get("cov_steps_table") is not None:
                 st.dataframe(prop["cov_steps_table"], hide_index=True, width="stretch")
 
         with pr_sub4:
-            st.markdown("##### Kiểm định Tương quan Phần dư Ngẫu nhiên (sau khi loại bỏ ảnh hưởng Covariates):")
+            c_cr1, c_cr2 = st.columns([2.2, 1.0])
+            c_cr1.markdown("##### Kiểm định Tương quan Phần dư Ngẫu nhiên (sau khi loại bỏ ảnh hưởng Covariates):")
+            if prop.get("proposed_correlations"):
+                if c_cr2.button("[Apply Correlation] Áp dụng Tương quan", type="secondary", use_container_width=True, key="btn_apply_corr_only"):
+                    st.session_state["settings_changed_warning"] = True
+                    st.info(f"Đã ghi nhận đề xuất tương quan: {', '.join(prop['proposed_correlations'])}")
             corr_tbl = prop.get("corr_table")
             if corr_tbl is not None and not corr_tbl.empty:
                 st.dataframe(corr_tbl, hide_index=True, width="stretch")

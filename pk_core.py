@@ -1855,7 +1855,8 @@ def generate_model_proposal(res):
             for c in remaining:
                 cand_list = [cov_cols_map[sc] for sc in selected + [c]]
                 b_val, _ = _reg_bicc(y_stack, cand_list)
-                if b_val < best_bicc - 1e-4:
+                # Require meaningful BICc reduction (> 2.5 units, ~ p < 0.01) to avoid spurious proposals
+                if b_val < best_bicc - 2.5:
                     best_bicc = b_val
                     best_c = c
             if best_c is not None:
