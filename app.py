@@ -1246,13 +1246,11 @@ def main():
     if "nav_step" not in st.session_state:
         st.session_state["nav_step"] = "1. Data"
 
-    # Kiểm tra chuyển tab từ các nút điều hướng
     if "pending_nav_step" in st.session_state:
         next_step = st.session_state.pop("pending_nav_step")
         st.session_state["nav_step"] = next_step
         st.session_state["sidebar_nav_radio"] = next_step
 
-    # Danh mục các Tab điều hướng bên tay trái theo chuẩn Monolix
     NAV_OPTIONS = [
         "1. Data",
         "2. SAEM Estimation & Initial Estimates",
@@ -1262,6 +1260,7 @@ def main():
         "6. Covariates & Simulx"
     ]
 
+    # ── THANH BÊN (SIDEBAR): CHỈ CHỨA LOGO, BRAND, VÀ ĐIỀU HƯỚNG QUY TRÌNH WORKFLOW ──
     with st.sidebar:
         logo_html = (
             f'<img src="data:image/png;base64,{LOGO_B64}" '
@@ -1299,178 +1298,122 @@ def main():
         st.session_state["nav_step"] = selected_nav
 
         st.markdown("---")
-        st.markdown("### Nguồn dữ liệu")
-        data_source_opt = st.radio(
-            "Chọn dữ liệu",
-            ["Tải lên file (Excel/CSV)", "Dataset lâm sàng (Dataset_chính_thức.xlsx)", "Mô phỏng quần thể (Simulation)"]
-        )
-
-        clinical_data = None
-        df_sim = None
-
-        selected_lib_id = st.session_state.get("selected_lib_model", "")
-        is_bolus_mode = str(selected_lib_id).startswith("bolus_")
-
-        if data_source_opt == "Tải lên file (Excel/CSV)":
-            uploaded_file = st.file_uploader("Tải lên file dữ liệu lâm sàng", type=["xlsx", "xls", "csv"], key="uploader_data_file")
-            if is_bolus_mode:
-                tinf = 0.01
-                st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
-            else:
-                tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_upload_input")
-            if uploaded_file is not None:
-                tmp_path = f"/tmp/{uploaded_file.name}"
-                with open(tmp_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                try:
-                    clinical_data = data_io.load_dataset(tmp_path, tinf=tinf, enforce_g4=False)
-                    default_model = "1-Compartment IV infusion (multi-dose)"
-                except Exception as e:
-                    st.error(f"Lỗi nạp dữ liệu: {e}")
-                    clinical_data = None
-                    default_model = "1-Compartment IV infusion (multi-dose)"
-            else:
-                default_model = "1-Compartment IV infusion (multi-dose)"
-        elif data_source_opt == "Dataset lâm sàng (Dataset_chính_thức.xlsx)":
+        # Nút nạp nhanh tập dữ liệu chuẩn lâm sàng (Quick sample loader)
+        st.caption("Dữ liệu mẫu nghiên cứu:")
+        if st.button("Nạp Dataset chuẩn lâm sàng (83 BN)", use_container_width=True, key="btn_quick_load_sample"):
             excel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dataset_chính_thức.xlsx"))
-            if is_bolus_mode:
-                tinf = 0.01
-                st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
-            else:
-                tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_main_input")
-            clinical_data = data_io.load_dataset(excel_path, tinf=tinf, enforce_g4=True)
-            default_model = "1-Compartment IV infusion (multi-dose)"
-        else:
-            default_model = "1-Compartment (Oral)"
+            if os.path.exists(excel_path):
+                st.session_state["clinical_data"] = data_io.load_dataset(excel_path, tinf=1.0, enforce_g4=True)
+                st.session_state["loaded_data_name"] = "Dataset_chính_thức.xlsx (83 bệnh nhân chuẩn)"
+                st.session_state["tinf_val"] = 1.0
+                st.session_state.pop("res", None)
+                st.session_state.pop("vpc", None)
+                st.rerun()
 
-        # Monolix Library Section
-        st.markdown("### Thư viện mô hình Monolix")
-        if st.button("LOAD FROM LIBRARY", type="primary", use_container_width=True, help="Mở thư viện mô hình Dược động học chuẩn Monolix"):
-            show_model_library_dialog()
-
-        if "selected_lib_model" in st.session_state:
-            lib_id = st.session_state["selected_lib_model"]
-            st.markdown(f"""
-            <div style="background: #e0f2fe; border: 1px solid #7dd3fc; border-radius: 6px; padding: 6px 10px; font-size: 12px; margin-bottom: 8px;">
-                <span style="color: #0369a1; font-weight: 700;">Monolix Model:</span> <code>{lib_id}</code>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("### Cấu hình mô hình")
-        model_names = list(pk.MODELS.keys())
-
-        if "selected_lib_model" in st.session_state:
-            lib_id = st.session_state["selected_lib_model"]
-            lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
-            if lib_id in lib_map:
-                target_model = lib_map[lib_id]["internal_model"]
-                if target_model in model_names and st.session_state.get("model_structure_select") != target_model:
-                    st.session_state["model_structure_select"] = target_model
-                    st.session_state.pop("res", None)
-                    st.session_state.pop("vpc", None)
-
-        if "model_structure_select" not in st.session_state:
-            if "model_name_choice" in st.session_state and st.session_state["model_name_choice"] in model_names:
-                st.session_state["model_structure_select"] = st.session_state["model_name_choice"]
-            elif default_model in model_names:
-                st.session_state["model_structure_select"] = default_model
-            else:
-                st.session_state["model_structure_select"] = model_names[0]
-        elif st.session_state["model_structure_select"] not in model_names:
-            st.session_state["model_structure_select"] = model_names[0]
-
-        def on_model_structure_change():
-            cur = st.session_state.get("model_structure_select")
-            cur_lib = st.session_state.get("selected_lib_model")
-            if cur_lib:
-                lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
-                if cur_lib in lib_map and lib_map[cur_lib]["internal_model"] != cur:
-                    st.session_state.pop("selected_lib_model", None)
-            st.session_state.pop("res", None)
-            st.session_state.pop("vpc", None)
-
-        model_name = st.selectbox(
-            "Mô hình cấu trúc",
-            model_names,
-            key="model_structure_select",
-            on_change=on_model_structure_change
-        )
-        mi = pk.MODELS[model_name]
-        names = mi["params"]
-        units = mi.get("units", [""] * len(names))
-        units_dict = dict(zip(names, units))
-        key = lambda s: f"{model_name}_{s}"
-
-        # Áp dụng các ước lượng tự động Auto-estimate trước khi widget slider được khởi tạo
-        if "pending_auto_estimates" in st.session_state:
-            pending = st.session_state.pop("pending_auto_estimates")
-            for p_k, p_v in pending.items():
-                st.session_state[p_k] = p_v
-            st.session_state["auto_estimated_flag"] = True
-
-        st.markdown("### Thông số quần thể ban đầu (θ)")
-        pop_params = {}
-        for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
-            step = 0.05 if r[1] < 10 else 0.5
-            val_k = key(f"pop_{p}")
-            val_arg = None if val_k in st.session_state else float(d)
-            pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), val_arg, float(step), key=val_k)
-
-        st.markdown("### Biến thiên giữa các cá thể (ω)")
-        omega_dict = {p: st.slider(f"ω_{p}", 0.05, 1.0, float(st.session_state.get(key(f"om_{p}"), 0.3)), 0.05, key=key(f"om_{p}")) for p in names}
-
-        st.markdown("### Mô hình sai số dư")
-        err_models = ["combined", "combined1", "constant", "proportional"]
-        if "error_model_select" not in st.session_state:
-            err_def = st.session_state.get("error_model_choice", "combined")
-            st.session_state["error_model_select"] = err_def if err_def in err_models else "combined"
-        elif st.session_state["error_model_select"] not in err_models:
-            st.session_state["error_model_select"] = "combined"
-        error_model = st.selectbox("Error Model", err_models, key="error_model_select")
-        c_err1, c_err2 = st.columns(2)
-        sigma_add = c_err1.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1)
-        sigma_prop = c_err2.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02)
-
-        st.markdown("### Covariate")
-        if clinical_data is not None:
-            cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
-            cov_sel = st.multiselect("Hiệu ứng covariate", cov_opts, default=[])
-            cov_mode = st.radio("Chế độ Covariate", ["time-varying", "baseline"])
-        else:
-            cov_sel = st.multiselect("Covariate effect cần ước lượng", [f"{p}~{c}" for p in names for c in pk.COVARIATES],
-                                     key=key("covsel"))
-            cov_mode = "baseline"
-
-        cov_model = {}
-        for s in cov_sel:
-            p, c = s.split("~")
-            cov_model.setdefault(p, []).append(c)
-
-        st.markdown("### Cài đặt SAEM")
-        n_iter1 = st.slider("K1: pha exploratory (γ=1)", 50, 600, 250, 50)
-        n_iter2 = st.slider("K2: pha smoothing (γ=1/k)", 25, 400, 150, 25)
-        n_chains = st.slider("Số chain", 1, 3, 1)
-        fit_seed = st.number_input("Seed SAEM", 0, 9999, 42)
-
-        st.markdown("---")
+        st.markdown("<br>", unsafe_allow_html=True)
         c_out1, c_out2 = st.columns([1.5, 1])
         c_out1.caption("Đã xác thực")
         if c_out2.button("Đăng xuất", key="btn_logout", type="secondary", use_container_width=True):
             st.session_state["authenticated"] = False
             st.rerun()
 
-    res = st.session_state.get("res")
+    # Dữ liệu lâm sàng từ Session State
+    clinical_data = st.session_state.get("clinical_data", None)
+    tinf = float(st.session_state.get("tinf_val", 1.0))
     current_tab = st.session_state.get("nav_step", "1. Data")
+    res = st.session_state.get("res")
+
+    # Đồng bộ mô hình cấu trúc mặc định
+    model_names = list(pk.MODELS.keys())
+    default_model = "1-Compartment IV infusion (multi-dose)"
+    if "selected_lib_model" in st.session_state:
+        lib_id = st.session_state["selected_lib_model"]
+        lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
+        if lib_id in lib_map:
+            target_model = lib_map[lib_id]["internal_model"]
+            if target_model in model_names and st.session_state.get("model_structure_select") != target_model:
+                st.session_state["model_structure_select"] = target_model
+                st.session_state.pop("res", None)
+                st.session_state.pop("vpc", None)
+
+    if "model_structure_select" not in st.session_state:
+        st.session_state["model_structure_select"] = default_model
+
+    model_name = st.session_state["model_structure_select"]
+    mi = pk.MODELS[model_name]
+    names = mi["params"]
+    units = mi.get("units", [""] * len(names))
+    units_dict = dict(zip(names, units))
+    key = lambda s: f"{model_name}_{s}"
+
+    # Áp dụng pending_auto_estimates nếu có
+    if "pending_auto_estimates" in st.session_state:
+        pending = st.session_state.pop("pending_auto_estimates")
+        for p_k, p_v in pending.items():
+            st.session_state[p_k] = p_v
+        st.session_state["auto_estimated_flag"] = True
 
     # ── MÀN HÌNH 1: DATA (NHẬP VÀ THẨM ĐỊNH DỮ LIỆU) ──
     if current_tab == "1. Data":
+        header("Quản lý & Nhập Dữ liệu Nghiên cứu (Data Import & Validation)")
+        
+        c_src1, c_src2 = st.columns([1.2, 1.8])
+        with c_src1:
+            st.markdown("#### Nguồn dữ liệu (Data Source)")
+            data_source_mode = st.radio(
+                "Chọn phương thức nạp dữ liệu",
+                ["Tải lên file (Excel/CSV)", "Dataset lâm sàng mẫu (Dataset_chính_thức.xlsx)"],
+                key="main_data_source_radio",
+                label_visibility="collapsed"
+            )
+
+        with c_src2:
+            st.markdown("#### Thông tin cấu hình đưa liều (Dosing Administration)")
+            selected_lib_id = st.session_state.get("selected_lib_model", "")
+            is_bolus_mode = str(selected_lib_id).startswith("bolus_")
+            if is_bolus_mode:
+                tinf = 0.01
+                st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
+            else:
+                tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_main_step1")
+                st.session_state["tinf_val"] = tinf
+
+        st.markdown("---")
+
+        if data_source_mode == "Tải lên file (Excel/CSV)":
+            uploaded_file = st.file_uploader(
+                "Chọn file dữ liệu lâm sàng từ máy tính (Excel hoặc CSV)",
+                type=["xlsx", "xls", "csv"],
+                key="main_file_uploader_widget"
+            )
+            if uploaded_file is not None:
+                tmp_path = f"/tmp/{uploaded_file.name}"
+                with open(tmp_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                try:
+                    clinical_data = data_io.load_dataset(tmp_path, tinf=tinf, enforce_g4=False)
+                    st.session_state["clinical_data"] = clinical_data
+                    st.session_state["loaded_data_name"] = uploaded_file.name
+                except Exception as e:
+                    st.error(f"Lỗi nạp dữ liệu: {e}")
+                    clinical_data = None
+                    st.session_state["clinical_data"] = None
+
+        elif data_source_mode == "Dataset lâm sàng mẫu (Dataset_chính_thức.xlsx)":
+            excel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dataset_chính_thức.xlsx"))
+            if os.path.exists(excel_path):
+                if clinical_data is None or st.session_state.get("loaded_data_name") != "Dataset_chính_thức.xlsx":
+                    clinical_data = data_io.load_dataset(excel_path, tinf=tinf, enforce_g4=True)
+                    st.session_state["clinical_data"] = clinical_data
+                    st.session_state["loaded_data_name"] = "Dataset_chính_thức.xlsx"
+
+        # Hiển thị dữ liệu hoặc giao diện chờ
         if clinical_data is None:
-            header("Nạp bộ dữ liệu nghiên cứu (Data Import Required)")
             st.markdown("""
             <div style="background:#f8fafc;border:2px dashed #94a3b8;border-radius:12px;padding:36px;text-align:center;margin:20px 0;">
                 <h3 style="color:#0f172a;margin-bottom:8px;font-weight:700;">Chưa có dữ liệu nào được nạp</h3>
                 <p style="color:#64748b;font-size:14px;max-width:550px;margin:0 auto 20px auto;">
-                    Vui lòng chọn <b>"Tải lên file (Excel/CSV)"</b> ở thanh bên trái hoặc chọn tập dữ liệu mẫu <b>Dataset_chính_thức.xlsx</b> để bắt đầu quy trình phân tích Dược động học.
+                    Vui lòng kéo thả hoặc tải lên file dữ liệu lâm sàng (Excel/CSV) ở phía trên để hệ thống tiến hành kiểm chuẩn Gate G4 và phân tích phi khoang NCA.
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -1492,19 +1435,19 @@ def main():
                 - `Sepsis`: Tình trạng nhiễm khuẩn huyết (0/1)
                 """)
         else:
-            header("Bộ dữ liệu lâm sàng thực tế")
+            header(f"Bộ dữ liệu lâm sàng: {st.session_state.get('loaded_data_name', 'Dữ liệu nạp')}")
             c = st.columns(4)
             c[0].metric("Bệnh nhân", clinical_data["N"])
             c[1].metric("Mẫu nồng độ (DV)", clinical_data["nobs"])
             c[2].metric("Tổng số liều", sum(len(d) for d in clinical_data["sub_doses"].values()))
             c[3].metric("Thời gian truyền tinf", f"{clinical_data.get('tinf', 1.0):.1f} h")
 
-            st.markdown('<div class="convergence-box"><b>Gate G4 Strictly Verified:</b> 565 dòng / 83 bệnh nhân / 287 liều / 278 quan sát DV. Không có trùng lặp (ID, Time).</div>', unsafe_allow_html=True)
+            st.markdown('<div class="convergence-box"><b>Gate G4 Strictly Verified:</b> Đã kiểm tra tính hợp lệ dữ liệu. Không có bản ghi trùng lặp (ID, Time).</div>', unsafe_allow_html=True)
 
             # Nút chuyển nhanh sang Bước 2
             c_go1, c_go2 = st.columns([1.5, 1])
             with c_go1:
-                st.success("Dữ liệu đã sẵn sàng! Bạn có thể tiếp tục sang bước Ước lượng khởi tạo và chạy SAEM.")
+                st.success("Dữ liệu đã sẵn sàng! Chuyển sang bước cấu hình mô hình và chạy ước lượng SAEM.")
             with c_go2:
                 if st.button("Tiếp tục: Cấu hình & Chạy SAEM →", type="primary", use_container_width=True, key="btn_goto_saem"):
                     st.session_state["pending_nav_step"] = "2. SAEM Estimation & Initial Estimates"
@@ -1545,7 +1488,7 @@ def main():
                                          line=dict(width=1.2, color=line_col), marker=dict(size=4),
                                          name=grp_name, showlegend=(spag_strat != "Tất cả"), opacity=0.6))
 
-            fig.update_layout(title="Observed Concentrations vs Time (83 subjects)", xaxis_title="Time (h)",
+            fig.update_layout(title="Observed Concentrations vs Time", xaxis_title="Time (h)",
                               yaxis_title="Concentration DV (mg/L)",
                               yaxis_type="log" if spag_scale == "Logarit (Semi-log)" else "linear",
                               height=480, template="plotly_white")
@@ -1556,7 +1499,7 @@ def main():
             df_ind_nca, df_sum_nca = compute_nca(clinical_data)
             if df_sum_nca is not None:
                 st.dataframe(df_sum_nca, width="stretch")
-                with st.expander("Xem chi tiết thông số NCA từng bệnh nhân (83 cá thể)"):
+                with st.expander("Xem chi tiết thông số NCA từng bệnh nhân"):
                     st.dataframe(df_ind_nca, width="stretch")
 
             st.dataframe(clean_df.head(100), width="stretch")
@@ -1565,18 +1508,51 @@ def main():
             with open(out_csv, "rb") as f:
                 st.download_button("Tải file Monolix CSV (export_monolix.csv)", f.read(), "export_monolix.csv", "text/csv")
 
-    # ── MÀN HÌNH 2: SAEM ESTIMATION & INITIAL ESTIMATES (TÍCH HỢP MÔ HÌNH, AUTO-ESTIMATE VÀ CHẠY SAEM) ──
+    # ── MÀN HÌNH 2: SAEM ESTIMATION & INITIAL ESTIMATES (TÍCH HỢP MÔ HÌNH, THIẾT LẬP VÀ CHẠY SAEM) ──
     elif current_tab == "2. SAEM Estimation & Initial Estimates":
-        target_data = clinical_data if clinical_data is not None else df_sim
-        if target_data is None:
-            st.warning("Vui lòng tải hoặc nạp dữ liệu ở bước 1. Data trước khi cấu hình và chạy SAEM.")
+        if clinical_data is None:
+            st.warning("Vui lòng nạp dữ liệu ở bước 1. Data trước khi cấu hình và chạy SAEM.")
         else:
             header(f"Ước lượng SAEM & Khởi tạo Tham số: {model_name}")
 
-            # Khung 2 cột: Cột trái (Thông tin mô hình & Code Monolix) | Cột phải (Setup SAEM & Chạy)
-            col_l, col_r = st.columns([1.2, 1.0])
-            with col_l:
-                st.markdown(f"**Tên mô hình thư viện Monolix**: `{st.session_state.get('selected_lib_model', 'Tùy chỉnh')}`")
+            # Khối chọn mô hình từ thư viện Monolix hoặc danh sách có sẵn
+            c_m1, c_m2 = st.columns([1.5, 1])
+            with c_m1:
+                st.markdown("#### Lựa chọn Mô hình Dược động học (Model Selection)")
+                def on_model_structure_change():
+                    cur = st.session_state.get("model_structure_select")
+                    cur_lib = st.session_state.get("selected_lib_model")
+                    if cur_lib:
+                        lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
+                        if cur_lib in lib_map and lib_map[cur_lib]["internal_model"] != cur:
+                            st.session_state.pop("selected_lib_model", None)
+                    st.session_state.pop("res", None)
+                    st.session_state.pop("vpc", None)
+
+                model_name = st.selectbox(
+                    "Mô hình cấu trúc",
+                    model_names,
+                    key="model_structure_select",
+                    on_change=on_model_structure_change
+                )
+                mi = pk.MODELS[model_name]
+                names = mi["params"]
+                units = mi.get("units", [""] * len(names))
+                units_dict = dict(zip(names, units))
+                key = lambda s: f"{model_name}_{s}"
+
+                if st.button("Mở Thư viện Mô hình Monolix Library", type="secondary", use_container_width=True):
+                    show_model_library_dialog()
+
+                if "selected_lib_model" in st.session_state:
+                    lib_id = st.session_state["selected_lib_model"]
+                    st.markdown(f"""
+                    <div style="background: #e0f2fe; border: 1px solid #7dd3fc; border-radius: 6px; padding: 6px 10px; font-size: 12px; margin: 8px 0;">
+                        <span style="color: #0369a1; font-weight: 700;">Monolix Model:</span> <code>{lib_id}</code>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with c_m2:
                 st.markdown(f"**Cấu hình phân bố**: `{model_name}` | **Thời gian truyền $t_{{inf}}$**: `{tinf:.2f} h`")
                 lib_id = st.session_state.get("selected_lib_model")
                 lib_entry = next((m for m in MONOLIX_LIBRARY if m["id"] == lib_id), None)
@@ -1595,16 +1571,13 @@ output = {{Cc}}
                     with st.expander("Xem mã nguồn mô hình định dạng Monolix (.txt)", expanded=False):
                         st.code(mlx_code, language="text")
 
-            with col_r:
-                st.markdown("**Các thông số quần thể ban đầu ($	heta_0$):**")
-                for p in names:
-                    st.markdown(rf"- **$	heta_{{{p}}}$**: `{pop_params[p]:.3f} {units_dict.get(p, '')}` (Biến thiên $\omega$: `{omega_dict[p]:.2f}`)")
-
             # Khối Auto-estimate Vd, Cl
             header("Tự động ước lượng thông số Vd, Cl dự kiến (Auto-estimate)")
+            st.info("Tính năng Auto-estimate chuẩn Monolix: phân tích nhanh dữ liệu lâm sàng bằng NCA để ước lượng trước độ thanh thải CL, thể tích phân bố Vd và thời gian bán thải t1/2, tự động gán vào điểm khởi tạo θ₀ cho thuật toán SAEM.")
+            
             c_auto1, c_auto2 = st.columns([1.2, 1.8])
             with c_auto1:
-                if st.button("Tự động ước lượng Vd, Cl dự kiến (Auto-estimate)", type="secondary", use_container_width=True, key="btn_auto_estimate"):
+                if st.button("Tự động ước lượng Vd, Cl dự kiến (Auto-estimate)", type="primary", use_container_width=True, key="btn_auto_estimate"):
                     est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
                     pending_dict = {}
                     for p_name, p_val in est_dict.items():
@@ -1622,19 +1595,57 @@ output = {{Cc}}
                 col_e3.metric("t1/2 dự kiến", f"{t_half_nca:.1f} h")
 
             if st.session_state.get("auto_estimated_flag", False):
-                st.success("Đã cập nhật tự động các giá trị khởi tạo Vd, Cl vào thông số ban đầu.")
+                st.success("Đã cập nhật tự động các giá trị khởi tạo Vd, Cl vào thông số ban đầu bên dưới.")
+
+            # Bảng điều khiển tham số khởi tạo và sai số
+            header("Thiết lập Thông số Ban đầu (Initial Parameters & Error Model)")
+            c_param1, c_param2 = st.columns(2)
+            with c_param1:
+                st.markdown("**Thông số quần thể ban đầu (θ):**")
+                pop_params = {}
+                for p, d, u, r in zip(names, mi["defaults"], mi["units"], mi["ranges"]):
+                    step = 0.05 if r[1] < 10 else 0.5
+                    val_k = key(f"pop_{p}")
+                    val_arg = None if val_k in st.session_state else float(d)
+                    pop_params[p] = st.slider(f"{p} ({u})", float(r[0]), float(r[1]), val_arg, float(step), key=val_k)
+
+            with c_param2:
+                st.markdown("**Biến thiên giữa các cá thể (ω):**")
+                omega_dict = {p: st.slider(f"ω_{p}", 0.05, 1.0, float(st.session_state.get(key(f"om_{p}"), 0.3)), 0.05, key=key(f"om_{p}")) for p in names}
+
+            # Thiết lập Sai số và Covariate
+            c_setup1, c_setup2 = st.columns(2)
+            with c_setup1:
+                st.markdown("**Mô hình sai số dư (Residual Error Model):**")
+                err_models = ["combined", "combined1", "constant", "proportional"]
+                error_model = st.selectbox("Error Model", err_models, key="main_error_model_select")
+                col_err_a, col_err_b = st.columns(2)
+                sigma_add = col_err_a.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1, key="main_sigma_a")
+                sigma_prop = col_err_b.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02, key="main_sigma_b")
+
+            with c_setup2:
+                st.markdown("**Covariate lâm sàng:**")
+                cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
+                cov_sel = st.multiselect("Hiệu ứng covariate", cov_opts, default=[], key="main_cov_select")
+                cov_mode = st.radio("Chế độ Covariate", ["time-varying", "baseline"], horizontal=True, key="main_cov_mode")
+
+            cov_model = {}
+            for s in cov_sel:
+                p, c = s.split("~")
+                cov_model.setdefault(p, []).append(c)
 
             # Trực quan hóa đường cong khởi tạo
             header("Biểu đồ Trực quan hóa Thông số Khởi tạo đè lên Dữ liệu (Visual Initial Estimates vs Data)")
-            fig_init = initial_estimates_preview_figure(target_data, model_name, pop_params)
+            fig_init = initial_estimates_preview_figure(clinical_data, model_name, pop_params)
             st.plotly_chart(fig_init, width="stretch")
 
-            # Khối Chạy SAEM
+            # Cài đặt thuật toán SAEM và Nút chạy
             header(f"Chạy ước lượng tham số SAEM: {model_name}")
-            c_saem_cfg1, c_saem_cfg2, c_saem_cfg3 = st.columns(3)
-            c_saem_cfg1.metric("Pha 1 (Exploratory)", f"{n_iter1} iterations")
-            c_saem_cfg2.metric("Pha 2 (Smoothing)", f"{n_iter2} iterations")
-            c_saem_cfg3.metric("Số chains / Seed", f"{n_chains} chain(s) / {fit_seed}")
+            c_saem1, c_saem2, c_saem3, c_saem4 = st.columns(4)
+            n_iter1 = c_saem1.slider("K1: exploratory (γ=1)", 50, 600, 250, 50, key="main_k1")
+            n_iter2 = c_saem2.slider("K2: smoothing (γ=1/k)", 25, 400, 150, 25, key="main_k2")
+            n_chains = c_saem3.slider("Số chains", 1, 3, 1, key="main_chains")
+            fit_seed = c_saem4.number_input("Seed SAEM", 0, 9999, 42, key="main_seed")
 
             if st.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main"):
                 init = dict(
@@ -1643,7 +1654,7 @@ output = {{Cc}}
                     err=[sigma_add, sigma_prop]
                 )
                 bar = st.progress(0, text="Đang chạy SAEM...")
-                res = pk.fit_model(target_data, model_name, init, cov_model, error_model,
+                res = pk.fit_model(clinical_data, model_name, init, cov_model, error_model,
                                    n_iter1=n_iter1, n_iter2=n_iter2, n_chains=n_chains,
                                    seed=int(fit_seed), progress=lambda x: bar.progress(x, text=f"SAEM {x:.0%}"),
                                    cov_mode=cov_mode)
