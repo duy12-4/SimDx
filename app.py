@@ -17,6 +17,7 @@ from scipy.stats import linregress, norm
 import pk_core as pk
 import data_io
 from monolix_library import MONOLIX_LIBRARY
+import monolix_engine as me
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
 if not os.path.exists(LOGO_PATH):
@@ -444,6 +445,96 @@ def vpc_figure(v, raw_points):
                                  marker=dict(color="gray", size=4, opacity=0.35), name="Quan sát"))
     fig.update_layout(title="VPC (5/50/95%, CI 90% của percentile)", xaxis_title="Time (h)",
                       yaxis_title="Concentration (mg/L)", height=480, template="plotly_white")
+    return fig
+
+
+def residuals_qq_figure(dg):
+    """QQ-plot chuẩn tắc của phần dư IWRES và NPDE theo chuẩn chẩn đoán Monolix."""
+    from scipy import stats
+    tt = dg["table"]
+    fig = make_subplots(rows=1, cols=2, subplot_titles=["Normal QQ-Plot: IWRES", "Normal QQ-Plot: NPDE"])
+    for idx, var in enumerate(["IWRES", "NPDE"]):
+        vals = tt[var].dropna().values
+        if len(vals) > 0:
+            (osm, osr), (slope, intercept, r) = stats.probplot(vals, dist="norm")
+            fig.add_trace(go.Scatter(x=osm, y=osr, mode="markers",
+                                     marker=dict(size=5, color="#1565c0", opacity=0.7),
+                                     name=f"{var} Quantiles"), row=1, col=idx+1)
+            fig.add_trace(go.Scatter(x=osm, y=slope * osm + intercept, mode="lines",
+                                     line=dict(color="red", dash="dash"),
+                                     name="Đường chuẩn N(0,1)"), row=1, col=idx+1)
+        fig.update_xaxes(title_text="Theoretical Quantiles", row=1, col=idx+1)
+        fig.update_yaxes(title_text=f"Sample Quantiles ({var})", row=1, col=idx+1)
+    fig.update_layout(height=380, template="plotly_white", showlegend=False,
+                      title_text="Phân tích Phân phối Phần dư (Residuals QQ-Plots)")
+    return fig
+
+
+def parameter_correlation_heatmap(res):
+    """Bản đồ nhiệt ma trận tương quan giữa các hiệu ứng ngẫu nhiên (Monolix Random Effects Correlation Matrix)."""
+    names = res["names"]
+    P = len(names)
+    cov_matrix = np.eye(P)
+    if "phi_hat" in res and res["phi_hat"] is not None:
+        mean_phi = pk.pop_mean_phi(res)
+        eta = res["phi_hat"] - mean_phi
+        if eta.shape[0] > 1:
+            cov_matrix = np.corrcoef(eta.T)
+            cov_matrix = np.nan_to_num(cov_matrix, nan=0.0)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=cov_matrix,
+        x=[f"η_{p}" for p in names],
+        y=[f"η_{p}" for p in names],
+        colorscale="RdBu",
+        zmin=-1, zmax=1,
+        text=np.round(cov_matrix, 2),
+        texttemplate="%{text}",
+        colorbar=dict(title="Correlation")
+    ))
+    fig.update_layout(title="Ma trận Tương quan Hiệu ứng Ngẫu nhiên (Random Effects Correlation Matrix)",
+                      height=420, template="plotly_white")
+    return fig
+
+
+def initial_estimates_preview_figure(target_data, model_name, pop_params):
+    """Biểu đồ xem trước đường cong nồng độ từ thông số khởi tạo đè lên dữ liệu bệnh nhân (Monolix Initial Estimates Tab)."""
+    fig = go.Figure()
+    if target_data is None:
+        return fig
+    
+    # 1. Vẽ các điểm dữ liệu thực tế mẫu (15 bệnh nhân đầu tiên)
+    if "ids" in target_data and len(target_data["ids"]) > 0:
+        sample_ids = target_data["ids"][:15]
+        for sid in sample_ids:
+            idx = int(np.where(target_data["ids"] == sid)[0][0])
+            mk = target_data["mask"][idx]
+            obs_t = target_data["t"][idx, mk]
+            obs_y = target_data["y"][idx, mk]
+            fig.add_trace(go.Scatter(x=obs_t, y=obs_y, mode="markers",
+                                     marker=dict(size=4, color="#94a3b8"), showlegend=False,
+                                     name=f"ID {sid}", hoverinfo="skip"))
+    
+    # 2. Tính đường cong nồng độ quần thể với pop_params
+    if model_name in pk.MODELS:
+        mi = pk.MODELS[model_name]
+        t_fine = np.linspace(0.0, 48.0, 200)
+        phi_init = np.array([[pop_params.get(p, mi["defaults"][j]) for j, p in enumerate(mi["params"])]])
+        dose_init = np.array([1000.0])
+        tinf_val = 0.01 if "bolus" in model_name.lower() else float(st.session_state.get("tinf_val", 1.0))
+        data_mock = {"tinf": tinf_val}
+        
+        try:
+            c_pred = pk.predict(model_name, t_fine[None, :], dose_init, phi_init, data=data_mock)[0]
+            fig.add_trace(go.Scatter(x=t_fine, y=c_pred, mode="lines",
+                                     line=dict(color="#1565c0", width=3),
+                                     name="Dự đoán Quần thể Ban đầu (θ₀ = Initial Pop Curve)"))
+        except Exception:
+            pass
+
+    fig.update_layout(title=f"Đường cong Khởi tạo Dược động học ({model_name}) đè lên Dữ liệu Thực tế",
+                      xaxis_title="Thời gian (h)", yaxis_title="Nồng độ (mg/L)",
+                      height=420, template="plotly_white")
     return fig
 
 
@@ -1147,6 +1238,8 @@ def main():
         )
         mi = pk.MODELS[model_name]
         names = mi["params"]
+        units = mi.get("units", [""] * len(names))
+        units_dict = dict(zip(names, units))
         key = lambda s: f"{model_name}_{s}"
 
         st.markdown("### :material/bar_chart: Thông số quần thể ban đầu (θ)")
@@ -1198,13 +1291,14 @@ def main():
             st.session_state["authenticated"] = False
             st.rerun()
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         ":material/database: Dữ liệu & PKanalix",
+        ":material/schema: Mô hình Cấu trúc & Khởi tạo",
         ":material/play_arrow: Ước lượng SAEM",
+        ":material/balance: Kiểm chuẩn Monolix 2024",
         ":material/monitoring: Chẩn đoán GOF",
-        ":material/schema: Sàng lọc Covariate",
         ":material/person: Khớp cá thể (Individual Fits)",
-        ":material/bar_chart: Thẩm định & Simulx"
+        ":material/bar_chart: Sàng lọc Covariate & Simulx"
     ])
 
     res = st.session_state.get("res")
@@ -1284,8 +1378,47 @@ def main():
                                       sigma_add, sigma_prop, (), n_sub_sim, dose_sim, tuple(T_GRID), len(T_GRID), 42)
             st.dataframe(df_sim.head(50), width="stretch")
 
-    # ── TAB 2: CẤU HÌNH & ƯỚC LƯỢNG SAEM + BOOTSTRAP ──
+    # ── TAB 2: MÔ HÌNH CẤU TRÚC & KHỞI TẠO (MODEL & INITIAL ESTIMATES) ──
     with tab2:
+        header(f"Mô hình Cấu trúc & Thông số Khởi tạo: {model_name}")
+        target_data = clinical_data if clinical_data is not None else df_sim
+        
+        c_m1, c_m2 = st.columns([1.5, 1])
+        with c_m1:
+            st.markdown(f"**Tên mô hình thư viện Monolix**: `{st.session_state.get('selected_lib_model', 'Tùy chỉnh')}`")
+            st.markdown(f"**Cấu hình phân bố**: `{model_name}` | **Thời gian truyền $t_{{inf}}$**: `{tinf:.2f} h`")
+            lib_id = st.session_state.get("selected_lib_model")
+            lib_entry = next((m for m in MONOLIX_LIBRARY if m["id"] == lib_id), None)
+            if lib_entry:
+                st.caption(f"📝 {lib_entry.get('desc', '')}")
+                mlx_code = f"""; Monolix Model Definition: {lib_id}
+[LONGITUDINAL]
+input = {{{', '.join(lib_entry['params'])}}}
+
+PK:
+{lib_entry.get('ode', '')}
+
+OUTPUT:
+output = {{Cc}}
+"""
+                with st.expander("📄 Xem mã nguồn mô hình định dạng Monolix (.txt)", expanded=True):
+                    st.code(mlx_code, language="text")
+            else:
+                st.info(f"Mô hình cấu trúc: {model_name}")
+
+        with c_m2:
+            st.markdown("**Các thông số quần thể ban đầu ($\theta_0$):**")
+            for p in names:
+                st.markdown(rf"- **$\theta_{{{p}}}$**: `{pop_params[p]:.3f} {units_dict.get(p, '')}` (Biến thiên $\omega$: `{omega_dict[p]:.2f}`)")
+            st.caption("💡 Chỉnh sửa các thanh trượt bên thanh trái để xem đường cong nồng độ cập nhật thời gian thực.")
+
+        header("Biểu đồ Trực quan hóa Thông số Khởi tạo đè lên Dữ liệu (Visual Initial Estimates vs Data)")
+        st.info("Đường cong dự đoán quần thể tương ứng với các giá trị $\theta_0$ ban đầu đè lên dữ liệu bệnh nhân thực tế, giúp đánh giá trực quan điểm khởi tạo trước khi chạy SAEM.")
+        fig_init = initial_estimates_preview_figure(target_data, model_name, pop_params)
+        st.plotly_chart(fig_init, width="stretch")
+
+    # ── TAB 3: CẤU HÌNH & ƯỚC LƯỢNG SAEM + BOOTSTRAP ──
+    with tab3:
         header(f"Chạy ước lượng tham số SAEM: {model_name}")
         target_data = clinical_data if clinical_data is not None else df_sim
         st.info(f"Đang phân tích mô hình: **{model_name}**. Thuật toán SAEM với MCMC 3 kernel kết hợp giải tích từng đoạn. Tính toán -2LL qua Importance Sampling phân phối Student-t5.")
@@ -1307,14 +1440,77 @@ def main():
         if "res" in st.session_state:
             show_fit(st.session_state["res"], clinical_data)
 
-    # ── TAB 3: CHẨN ĐOÁN GOF & OUTLIERS ──
-    with tab3:
-        header("Chẩn đoán mô hình (Goodness-of-Fit)")
+    # ── TAB 4: KIỂM CHUẨN MONOLIX 2024 (HEAD-TO-HEAD BENCHMARK) ──
+    with tab4:
+        header("Kiểm chuẩn Đối đầu Trực tiếp với Monolix 2024R1 (Head-to-Head Benchmark)")
+        target_data = clinical_data if clinical_data is not None else df_sim
+        is_installed = me.is_monolix_installed()
+        
+        if is_installed:
+            st.success("🟢 **MonolixSuite 2024R1 đã được phát hiện tại**: `/Applications/MonolixSuite2024R1.app`", icon=":material/check_circle:")
+        else:
+            st.info("ℹ️ Monolix chưa được cài đặt ở đường dẫn mặc định trên macOS. Bạn vẫn có thể chỉ định thư mục kết quả Monolix để đối chiếu.")
+
+        c_bm1, c_bm2 = st.columns([1, 1])
+        default_mlx_proj = "/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn.mlxtran") else ""
+        mlx_proj_path = c_bm1.text_input("Đường dẫn file dự án Monolix (.mlxtran)", value=default_mlx_proj, key="mlx_proj_input")
+        default_mlx_dir = "/Users/macbook/Documents/Mô hình 2 ngăn" if os.path.exists("/Users/macbook/Documents/Mô hình 2 ngăn") else ""
+        mlx_export_dir = c_bm2.text_input("Thư mục kết quả xuất Monolix", value=default_mlx_dir, key="mlx_dir_input")
+
+        col_b1, col_b2 = st.columns(2)
+        btn_run_mlx = col_b1.button("🚀 Chạy Monolix 2024 CLI Ngầm (--no-gui)", disabled=not is_installed, type="primary", use_container_width=True)
+        btn_load_mlx = col_b2.button("📂 Tải & So sánh Kết quả Monolix", type="secondary", use_container_width=True)
+
+        if btn_run_mlx:
+            if not os.path.exists(mlx_proj_path):
+                st.error(f"Không tìm thấy file dự án: {mlx_proj_path}")
+            else:
+                with st.spinner("Đang chạy Monolix 2024R1 ở chế độ dòng lệnh ngầm..."):
+                    ok, out, err = me.run_monolix_project(mlx_proj_path)
+                    if ok:
+                        st.success("✅ Monolix đã hoàn thành tính toán thành công!")
+                    else:
+                        st.warning(f"Monolix chạy xong với thông báo: {err or out}")
+
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở tab 2 trước.", icon=":material/warning:")
+            st.info("💡 Hãy chạy SAEM ở tab 3 trước để có kết quả SimDx đối chiếu trực tiếp với Monolix.")
+        else:
+            if os.path.exists(mlx_export_dir):
+                df_comp, df_ic = me.build_benchmark_comparison(res, mlx_export_dir)
+                if df_comp is not None:
+                    header("Bảng So sánh Tham số Đối đầu: Monolix 2024R1 vs SimDx")
+                    st.dataframe(df_comp, width="stretch")
+                    
+                    if df_ic is not None:
+                        header("So sánh Tiêu chuẩn Hàm Mục tiêu & Thông tin")
+                        st.dataframe(df_ic, width="stretch")
+
+                    csv_report = df_comp.to_csv(index=False)
+                    st.download_button("Tải Báo cáo Kiểm chuẩn CSV (`benchmark_monolix_simdx.csv`)",
+                                       csv_report, "benchmark_monolix_simdx.csv", "text/csv",
+                                       icon=":material/download:", key="btn_download_bm_csv")
+                else:
+                    st.warning("Chưa tìm thấy file `populationParameters.txt` trong thư mục Monolix chỉ định.")
+            else:
+                st.warning("Thư mục kết quả Monolix không tồn tại. Vui lòng kiểm tra lại đường dẫn.")
+
+    # ── TAB 5: CHẨN ĐOÁN GOF & OUTLIERS ──
+    with tab5:
+        header("Chẩn đoán mô hình (Goodness-of-Fit & Residuals Distribution)")
+        if res is None:
+            st.warning("Vui lòng chạy SAEM ở tab 3 trước.", icon=":material/warning:")
         else:
             dg = res["diag"]
             st.plotly_chart(gof_figure(dg), width="stretch")
+            
+            # QQ plots of residuals
+            header("Chẩn đoán Phân phối Phần dư (Normal QQ-Plots)")
+            st.plotly_chart(residuals_qq_figure(dg), width="stretch")
+
+            # Random Effects Correlation Heatmap
+            header("Ma trận Tương quan Hiệu ứng Ngẫu nhiên (Random Effects Correlation)")
+            st.plotly_chart(parameter_correlation_heatmap(res), width="stretch")
+
             header("Random Effects (η̂ = EBE) & Shrinkage")
             P = len(res["names"])
             cols = st.columns(P + 2)
@@ -1333,42 +1529,14 @@ def main():
             else:
                 st.markdown('<div class="convergence-box">Tất cả các điểm phần dư IWRES và NPDE đều nằm trong giới hạn kiểm soát thống kê an toàn (|residual| ≤ 2.5).</div>', unsafe_allow_html=True)
 
-    # ── TAB 4: SÀNG LỌC COVARIATE & FINAL MODEL ──
-    with tab4:
-        header("Sàng lọc Covariate & Mô hình Tối ưu (Covariate Search & SCM)")
-        if res is None:
-            st.warning("Vui lòng chạy SAEM ở tab 2 trước.", icon=":material/warning:")
-        else:
-            header("Tương quan giữa Hiệu ứng Ngẫu nhiên (η̂ = EBE) và Covariate")
-            fig_cov = covariate_correlation_figure(res, clinical_data)
-            if fig_cov is not None:
-                st.plotly_chart(fig_cov, width="stretch")
-
-            header("Bảng So sánh Mô hình Từng bước (Stepwise Covariate Modeling - SCM)")
-            cov_summary_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "validation", "covariate_analysis.csv"))
-            is_standard_vanco = (clinical_data is not None and clinical_data.get("N", 0) == 83 and clinical_data.get("nobs", 0) == 278)
-            if is_standard_vanco and os.path.exists(cov_summary_path):
-                cov_df = pd.read_csv(cov_summary_path)
-                st.dataframe(cov_df, width="stretch")
-            elif os.path.exists(cov_summary_path):
-                with st.expander("Tham khảo Benchmark: Bảng SCM trên tập dữ liệu chuẩn Vancomycin 83 BN", expanded=False):
-                    cov_df = pd.read_csv(cov_summary_path)
-                    st.dataframe(cov_df, width="stretch")
-                st.info("💡 Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
-            else:
-                st.info("Chạy `python3 validation/run_covariate_analysis.py` để cập nhật bảng so sánh covariate.")
-
-            header("Phương trình Dược động học Quần thể (Population Model Equations)")
-            render_dynamic_model_equations(res, clinical_data, show_scm_benchmark=True)
-
-    # ── TAB 5: KHỚP CÁ THỂ ──
-    with tab5:
+    # ── TAB 6: KHỚP CÁ THỂ ──
+    with tab6:
         header("Đường cong nồng độ cá thể (Individual Fits)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở tab 2 trước.", icon=":material/warning:")
+            st.warning("Vui lòng chạy SAEM ở tab 3 trước.", icon=":material/warning:")
         else:
             d = res["data"]
-            sid_choice = st.selectbox("Chọn bệnh nhân (ID)", d["ids"], key="select_patient_tab5")
+            sid_choice = st.selectbox("Chọn bệnh nhân (ID)", d["ids"], key="select_patient_tab6")
             idx_sub = int(np.where(d["ids"] == sid_choice)[0][0])
             
             t_max_sub = float(d["t"][idx_sub, d["mask"][idx_sub]].max()) * 1.1 if d["mask"][idx_sub].any() else 48.0
@@ -1418,12 +1586,46 @@ def main():
                 fig.update_yaxes(type="log")
             st.plotly_chart(fig, width="stretch")
 
-    # ── TAB 6: THẨM ĐỊNH VPC & MÔ PHỎNG SIMULX ──
-    with tab6:
-        header("Thẩm định Mô hình bằng Visual Predictive Check (VPC)")
+            # Bảng tổng hợp toàn bộ 83 cá thể EBE
+            header("Bảng Tổng hợp Thông số Dược động học Cá thể (Individual Parameters Table)")
+            ebe_rows = []
+            for i, sid in enumerate(d["ids"]):
+                row_dict = {"ID": sid}
+                for j, p in enumerate(res["names"]):
+                    row_dict[f"{p}"] = float(np.exp(res["phi_hat"][i, j]))
+                    row_dict[f"η_{p}"] = float(res["phi_hat"][i, j] - pk.pop_mean_phi(res)[i, j])
+                ebe_rows.append(row_dict)
+            st.dataframe(pd.DataFrame(ebe_rows), width="stretch")
+
+    # ── TAB 7: SÀNG LỌC COVARIATE & MÔ PHỎNG SIMULX ──
+    with tab7:
+        header("Sàng lọc Covariate & Mô hình Tối ưu (Covariate Search & SCM)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở tab 2 trước.", icon=":material/warning:")
+            st.warning("Vui lòng chạy SAEM ở tab 3 trước.", icon=":material/warning:")
         else:
+            header("Tương quan giữa Hiệu ứng Ngẫu nhiên (η̂ = EBE) và Covariate")
+            fig_cov = covariate_correlation_figure(res, clinical_data)
+            if fig_cov is not None:
+                st.plotly_chart(fig_cov, width="stretch")
+
+            header("Bảng So sánh Mô hình Từng bước (Stepwise Covariate Modeling - SCM)")
+            cov_summary_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "validation", "covariate_analysis.csv"))
+            is_standard_vanco = (clinical_data is not None and clinical_data.get("N", 0) == 83 and clinical_data.get("nobs", 0) == 278)
+            if is_standard_vanco and os.path.exists(cov_summary_path):
+                cov_df = pd.read_csv(cov_summary_path)
+                st.dataframe(cov_df, width="stretch")
+            elif os.path.exists(cov_summary_path):
+                with st.expander("Tham khảo Benchmark: Bảng SCM trên tập dữ liệu chuẩn Vancomycin 83 BN", expanded=False):
+                    cov_df = pd.read_csv(cov_summary_path)
+                    st.dataframe(cov_df, width="stretch")
+                st.info("💡 Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
+            else:
+                st.info("Chạy `python3 validation/run_covariate_analysis.py` để cập nhật bảng so sánh covariate.")
+
+            header("Phương trình Dược động học Quần thể (Population Model Equations)")
+            render_dynamic_model_equations(res, clinical_data, show_scm_benchmark=True)
+
+            header("Thẩm định Mô hình bằng Visual Predictive Check (VPC)")
             c1, c2 = st.columns(2)
             n_rep = c1.slider("Số bản sao mô phỏng (Replicates)", 20, 200, 50, 10, key="vpc_nrep")
             pcorr = c2.checkbox("Prediction-corrected (pcVPC)", value=True, key="vpc_pcorr")
