@@ -1867,7 +1867,7 @@ def main():
     # Đồng bộ mô hình cấu trúc mặc định mà không xóa kết quả đang có
     model_names = list(pk.MODELS.keys())
     default_model = "1-Compartment IV infusion (multi-dose)"
-    if "chosen_model_name" not in st.session_state:
+    if not st.session_state.get("chosen_model_name") or st.session_state.get("chosen_model_name") not in pk.MODELS:
         st.session_state["chosen_model_name"] = default_model
 
     model_name = st.session_state["chosen_model_name"]
@@ -2129,17 +2129,21 @@ def main():
                         save_current_session()
 
                 cur_chosen = st.session_state.get("chosen_model_name", model_names[0])
-                sel_idx = model_names.index(cur_chosen) if cur_chosen in model_names else 0
-                val_arg = None if "model_structure_select" in st.session_state else sel_idx
+                if cur_chosen not in model_names:
+                    cur_chosen = model_names[0]
+                if st.session_state.get("model_structure_select") not in model_names:
+                    st.session_state["model_structure_select"] = cur_chosen
                 model_name = st.selectbox(
                     "Mô hình cấu trúc",
                     model_names,
-                    index=val_arg,
                     key="model_structure_select",
                     on_change=on_model_structure_change,
                     help="Chọn mô hình Dược động học 1 ngăn, 2 ngăn hoặc từ thư viện Monolix"
                 )
-                st.session_state["chosen_model_name"] = model_name
+                if model_name in pk.MODELS:
+                    st.session_state["chosen_model_name"] = model_name
+                else:
+                    model_name = cur_chosen
                 mi = pk.MODELS[model_name]
                 names = mi["params"]
                 units = mi.get("units", [""] * len(names))
