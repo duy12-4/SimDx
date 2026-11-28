@@ -991,6 +991,8 @@ def run_saem(data, model_name, init, cov_model, error_model="combined",
     S_xphi = [np.zeros(x.shape[1]) for x in X]
     S_phi2, Sr2, Sf2 = np.zeros(P), np.zeros((N, T)), np.zeros((N, T))
     cm_sum, cm2_sum, n_cm = np.zeros((N, P)), np.zeros((N, P)), 0
+    cond_samples_list = []
+    sample_stride = max(n_iter2 // 10, 1)
     hist = {"theta": [], "beta": [], "omega": [], "err": []}
     K = n_iter1 + n_iter2
 
@@ -1052,6 +1054,8 @@ def run_saem(data, model_name, init, cov_model, error_model="combined",
             cm_sum += ph.sum(0)
             cm2_sum += (ph ** 2).sum(0)
             n_cm += C
+            if ((k - n_iter1) % sample_stride == 0 or k == K) and len(cond_samples_list) < 10:
+                cond_samples_list.append(ph[0].copy())
         hist["theta"].append(np.exp([b[0] for b in beta]))
         hist["beta"].append([b.copy() for b in beta])
         hist["omega"].append(omega.copy())
@@ -1061,9 +1065,10 @@ def run_saem(data, model_name, init, cov_model, error_model="combined",
 
     cm = cm_sum / n_cm
     csd = np.sqrt(np.maximum(cm2_sum / n_cm - cm ** 2, 1e-6))
+    cond_samples = np.stack(cond_samples_list, axis=0) if cond_samples_list else cm[None, :, :]
     return dict(model_name=model_name, names=names, cov_model=cov_model, error_model=error_model,
                 data=data, X=X, beta=beta, omega=omega.copy(), err=err.copy(), history=hist,
-                cond_mean=cm, cond_sd=csd, n_iter1=n_iter1, n_iter2=n_iter2)
+                cond_mean=cm, cond_sd=csd, cond_samples=cond_samples, n_iter1=n_iter1, n_iter2=n_iter2)
 
 
 # ───────────────────────── Hậu xử lý ─────────────────────────
@@ -1702,65 +1707,244 @@ def compute_statistical_tests(res):
 
 def generate_model_proposal(res):
     """
-    Tạo Đề xuất Mô hình Thống kê Tự động (tương đương Results > PROPOSAL của Monolix):
-    1. Error Model: Đề xuất chuyển sang 'proportional' nếu 'a' (additive) có RSE% > 50% hoặc giá trị quá nhỏ.
-    2. Covariate Model: Dựa trên bảng TESTS (p < 0.05), chọn tối đa 1 đại diện mạnh nhất mỗi nhóm sinh lý
-       (Chức năng thận / Kích thước cơ thể) + các biến độc lập (GEN, Sepsis, Age, Albumin...).
+    Cơ chế PROPOSAL chuẩn Monolix dựa trên các mẫu từ Phân phối có Điều kiện (Conditional Distribution):
+    1. ERROR MODEL: Khớp MLE cả 4 mô hình sai số (constant, proportional, combined1, combined) trên dự đoán
+       từ các mẫu conditional distribution và xếp hạng theo BICc thấp nhất.
+    2. COVARIATE MODEL: Chạy hồi quy tuyến tính từng bước (Stepwise Linear Regression) tối thiểu hóa BICc
+       giữa các mẫu log(psi_i) từ conditional distribution và toàn bộ các hiệp biến, tự động loại đa cộng tuyến.
+    3. CORRELATION MODEL: Sau khi loại bỏ ảnh hưởng hiệp biến, tính ma trận tương quan phần dư ngẫu nhiên
+       (eta_resid) trên conditional distribution và đánh giá cải thiện BICc.
     """
+    data = res["data"]
+    names = res["names"]
+    N, T = data["N"], data["T"]
+    mask = data["mask"]
+    y_mat = data["y"]
     cur_err = res.get("error_model", "combined")
-    prop_err = cur_err
+    cur_cov = res.get("selected_cov_raw") or res.get("cov_model", {})
     reasons = []
 
-    fim = res.get("fim", {})
-    if cur_err in ["combined", "combined1"] and "a" in fim:
-        a_val, a_se = fim["a"]
-        a_rse = (a_se / abs(a_val) * 100) if (np.isfinite(a_se) and abs(a_val) > 1e-6) else 999.0
-        if a_rse > 50.0 or a_val < 0.15:
-            prop_err = "proportional"
-            reasons.append(f"Error model: Đề xuất chuyển `{cur_err}` → `proportional` (do sai số cộng `a = {a_val:.3f}` có RSE = {a_rse:.1f}% > 50%, không cần thiết).")
+    # Get conditional distribution samples [S, N, P] (fallback to cond_mean + cond_sd or phi_hat)
+    if "cond_samples" in res and res["cond_samples"] is not None:
+        cond_s = np.asarray(res["cond_samples"], dtype=float)
+    elif "cond_mean" in res and "cond_sd" in res:
+        rng = np.random.default_rng(123)
+        cm, csd = res["cond_mean"], res["cond_sd"]
+        cond_s = cm[None, :, :] + csd[None, :, :] * rng.standard_normal((5, N, len(names)))
+    else:
+        cond_s = res["phi_hat"][None, :, :]
+    S = cond_s.shape[0]
 
-    # Physiological collinearity groups
-    renal_grp = {"CLCr_CG", "CLCr_Je", "eGFR_CKD_EPI", "Creatinine"}
-    size_grp = {"TBW", "BSA", "AdBW", "Dosing weight", "Dosing_weight", "IBW", "BMI", "Height"}
+    # ── 1. ERROR MODEL PROPOSAL (MLE trên Conditional Distribution, xếp hạng theo BICc) ──
+    sub_ids = data["ids"] if "ids" in data else None
+    sub_doses = [data["sub_doses"][sid] for sid in data["ids"]] if "sub_doses" in data else None
+    sub_cov = [data["sub_cov_events"][sid] for sid in data["ids"]] if "sub_cov_events" in data else None
+    tinf = data.get("tinf", 1.0)
 
-    tests = compute_statistical_tests(res)
-    cov_tests = tests["cov_tests"]
+    f_list, y_list = [], []
+    for s_idx in range(S):
+        f_s = predict(res["model_name"], data["t"], data["dose"], cond_s[s_idx],
+                      data=data, sub_doses=sub_doses, sub_cov=sub_cov,
+                      beta=res["beta"], cov_model=res["cov_model"],
+                      cov_mode=res.get("cov_mode", "time-varying"), tinf=tinf, subject_ids=sub_ids)
+        f_list.append(f_s[mask])
+        y_list.append(y_mat[mask])
 
-    cur_cov = res.get("selected_cov_raw") or res.get("cov_model", {})
-    prop_cov = {p: list(v) for p, v in cur_cov.items() if v}
+    f_all = np.concatenate(f_list)
+    y_all = np.concatenate(y_list)
+    r2_all = (y_all - f_all) ** 2
+    n_obs = int(mask.sum())
 
-    for p, df_ct in cov_tests.items():
-        if df_ct.empty:
-            continue
-        existing = set(prop_cov.get(p, []))
-        has_renal = bool(existing & renal_grp)
-        has_size = bool(existing & size_grp)
+    err_candidates = []
+    for em in ["proportional", "constant", "combined1", "combined"]:
+        if em == "constant":
+            a_hat = float(np.sqrt(max(np.mean(r2_all), 1e-8)))
+            b_hat = 0.0
+            sd = np.maximum(a_hat, 1e-8)
+            k_par = 1
+        elif em == "proportional":
+            a_hat = 0.0
+            b_hat = float(np.sqrt(max(np.mean(r2_all / np.maximum(f_all ** 2, 1e-10)), 1e-8)))
+            sd = np.maximum(b_hat * np.abs(f_all), 1e-8)
+            k_par = 1
+        elif em == "combined1":
+            def obj_c1(x):
+                g = np.maximum(np.exp(x[0]) + np.exp(x[1]) * np.abs(f_all), 1e-8)
+                return np.sum(np.log(g) + 0.5 * r2_all / (g ** 2))
+            opt = minimize(obj_c1, np.log([0.5, 0.15]), method="L-BFGS-B", bounds=[(-7, 3), (-7, 1)])
+            a_hat, b_hat = float(np.exp(opt.x[0])), float(np.exp(opt.x[1]))
+            sd = np.maximum(a_hat + b_hat * np.abs(f_all), 1e-8)
+            k_par = 2
+        else:  # combined / combined2
+            def obj_c2(x):
+                v = np.maximum(np.exp(2 * x[0]) + np.exp(2 * x[1]) * (f_all ** 2), 1e-10)
+                return np.sum(0.5 * np.log(v) + 0.5 * r2_all / v)
+            opt = minimize(obj_c2, np.log([0.5, 0.15]), method="L-BFGS-B", bounds=[(-7, 3), (-7, 1)])
+            a_hat, b_hat = float(np.exp(opt.x[0])), float(np.exp(opt.x[1]))
+            sd = np.maximum(np.sqrt(a_hat ** 2 + (b_hat * f_all) ** 2), 1e-8)
+            k_par = 2
 
-        sig_rows = df_ct[df_ct["P-VALUE"] < 0.05]
-        for _, row in sig_rows.iterrows():
-            c_name = row["Covariate"]
-            pval = float(row["P-VALUE"])
-            if c_name in existing:
-                continue
-            if c_name in renal_grp:
-                if has_renal:
-                    continue
-                has_renal = True
-            elif c_name in size_grp:
-                if has_size:
-                    continue
-                has_size = True
-            prop_cov.setdefault(p, []).append(c_name)
-            existing.add(c_name)
-            reasons.append(f"Covariate `{p}~{c_name}`: Tương quan mạnh trên `eta_{p}` (p = {pval:.2e} < 0.05).")
+        # Average log-likelihood over S draws so effective sample count is n_obs
+        m2ll_e = float(np.sum(LOG2PI + 2.0 * np.log(sd) + r2_all / (sd ** 2)) / S)
+        bicc_e = float(m2ll_e + k_par * np.log(max(n_obs, 1)))
+        err_candidates.append({
+            "Error Model": em,
+            "-2LL": round(m2ll_e, 2),
+            "k": k_par,
+            "BICc": round(bicc_e, 2),
+            "Parameters": f"b={b_hat:.3f}" if em == "proportional" else (f"a={a_hat:.3f}" if em == "constant" else f"a={a_hat:.3f}, b={b_hat:.3f}")
+        })
+
+    err_df = pd.DataFrame(err_candidates).sort_values("BICc").reset_index(drop=True)
+    min_err_bicc = float(err_df["BICc"].iloc[0])
+    err_df["ΔBICc"] = (err_df["BICc"] - min_err_bicc).round(2)
+    prop_err = str(err_df["Error Model"].iloc[0])
+    if prop_err != cur_err:
+        reasons.append(f"ERROR MODEL: Đề xuất chuyển `{cur_err}` → `{prop_err}` (BICc thấp nhất = {min_err_bicc:.2f}).")
+
+    # ── 2. COVARIATE MODEL PROPOSAL (Stepwise Linear Regression theo BICc trên Conditional Distribution) ──
+    cov_types = data.get("cov_types", data.get("detected_covariates", {}))
+    cov_dict = data.get("cov", {})
+    cat_info = data.get("cat_info", {})
+
+    # Build covariate feature columns (one column per covariate; multi-level categorical uses its dummies)
+    active_cov_names = [c for c, ct in cov_types.items() if ct != "ignore"]
+    cov_cols_map = {}
+    for c in active_cov_names:
+        if c in cat_info and cat_info[c].get("dummies"):
+            cols_c = [cov_dict[d_name] for d_name, _ in cat_info[c]["dummies"] if d_name in cov_dict]
+            if cols_c:
+                cov_cols_map[c] = np.column_stack(cols_c)
+        elif c in cov_dict:
+            cov_cols_map[c] = cov_dict[c][:, None]
+
+    def _reg_bicc(y_stack, X_base_list):
+        # X_base_list: list of [N, d_k] arrays
+        if X_base_list:
+            X_n = np.column_stack([np.ones((N, 1))] + X_base_list)
+        else:
+            X_n = np.ones((N, 1))
+        X_stack = np.tile(X_n, (S, 1))
+        # OLS on stacked conditional samples
+        beta_hat, _, _, _ = np.linalg.lstsq(X_stack, y_stack, rcond=None)
+        resid = y_stack - X_stack @ beta_hat
+        rss_eff = max(float(np.sum(resid ** 2)) / S, 1e-10)
+        k_eff = X_n.shape[1] + 1  # beta + sigma^2
+        m2ll_r = N * (LOG2PI + np.log(rss_eff / N) + 1.0)
+        return float(m2ll_r + k_eff * np.log(max(N, 1))), beta_hat
+
+    prop_cov = {}
+    cov_steps = []
+    resid_etas = np.zeros((N, len(names)))
+
+    for j, p in enumerate(names):
+        y_stack = cond_s[:, :, j].reshape(-1)
+        selected = []
+        cur_bicc, cur_b = _reg_bicc(y_stack, [])
+        cov_steps.append({
+            "Parameter": p, "Step": "Base", "Covariate": "None",
+            "BICc": round(cur_bicc, 2), "ΔBICc": 0.0, "Decision": "Reference"
+        })
+
+        # Forward stepwise by BICc
+        remaining = list(cov_cols_map.keys())
+        step_i = 1
+        while remaining:
+            best_bicc = cur_bicc
+            best_c = None
+            for c in remaining:
+                cand_list = [cov_cols_map[sc] for sc in selected + [c]]
+                b_val, _ = _reg_bicc(y_stack, cand_list)
+                if b_val < best_bicc - 1e-4:
+                    best_bicc = b_val
+                    best_c = c
+            if best_c is not None:
+                delta_b = best_bicc - cur_bicc
+                selected.append(best_c)
+                remaining.remove(best_c)
+                cur_bicc = best_bicc
+                cov_steps.append({
+                    "Parameter": p, "Step": f"Forward {step_i}", "Covariate": f"+ {best_c}",
+                    "BICc": round(cur_bicc, 2), "ΔBICc": round(delta_b, 2), "Decision": "Selected (BICc giảm)"
+                })
+                step_i += 1
+            else:
+                break
+
+        # Backward check by BICc
+        b_i = 1
+        while len(selected) > 0:
+            best_rem_bicc = cur_bicc
+            drop_c = None
+            for c in selected:
+                cand_list = [cov_cols_map[sc] for sc in selected if sc != c]
+                b_val, _ = _reg_bicc(y_stack, cand_list)
+                if b_val < best_rem_bicc - 1e-4:
+                    best_rem_bicc = b_val
+                    drop_c = c
+            if drop_c is not None:
+                delta_b = best_rem_bicc - cur_bicc
+                selected.remove(drop_c)
+                cur_bicc = best_rem_bicc
+                cov_steps.append({
+                    "Parameter": p, "Step": f"Backward {b_i}", "Covariate": f"- {drop_c}",
+                    "BICc": round(cur_bicc, 2), "ΔBICc": round(delta_b, 2), "Decision": "Dropped (BICc giảm)"
+                })
+                b_i += 1
+            else:
+                break
+
+        if selected:
+            prop_cov[p] = selected
+            if set(selected) != set(cur_cov.get(p, [])):
+                reasons.append(f"COVARIATE MODEL (`{p}`): Đề xuất `{', '.join(selected)}` (tối thiểu hóa BICc = {cur_bicc:.2f} trên Conditional Distribution).")
+
+        # Compute residual eta after removing proposed covariates for Correlation Model check
+        X_final = np.column_stack([np.ones((N, 1))] + [cov_cols_map[sc] for sc in selected]) if selected else np.ones((N, 1))
+        _, b_fin = _reg_bicc(y_stack, [cov_cols_map[sc] for sc in selected])
+        cm_mean = cond_s[:, :, j].mean(axis=0)
+        resid_etas[:, j] = cm_mean - (X_final @ b_fin)
+
+    cov_steps_df = pd.DataFrame(cov_steps)
+
+    # ── 3. CORRELATION MODEL PROPOSAL (Random effects residual correlation trên Conditional Distribution) ──
+    corr_rows = []
+    prop_corrs = []
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            e1, e2 = resid_etas[:, i], resid_etas[:, j]
+            if np.std(e1) > 1e-8 and np.std(e2) > 1e-8:
+                lr = linregress(e1, e2)
+                r_val = float(lr.rvalue)
+                pval = float(lr.pvalue)
+                # Likelihood improvement of bivariate normal vs diagonal: -N * log(1 - r^2)
+                d_m2ll = -N * np.log(max(1.0 - r_val ** 2, 1e-8))
+                # BICc improvement: d_m2ll - log(N) (>0 means correlated model has lower BICc)
+                d_bicc = float(d_m2ll - np.log(max(N, 1)))
+                is_prop = (d_bicc > 0.0 and abs(r_val) >= 0.25)
+                if is_prop:
+                    prop_corrs.append(f"corr({names[i]}, {names[j]})")
+                    reasons.append(f"CORRELATION MODEL: Đề xuất thêm tương quan `({names[i]}, {names[j]})` (r = {r_val:.3f}, cải thiện BICc = {d_bicc:.2f}).")
+                corr_rows.append({
+                    "Pair": f"eta_{names[i]} ~ eta_{names[j]}",
+                    "Correlation (r)": round(r_val, 3),
+                    "p-value": f"{pval:.2e}",
+                    "ΔBICc (vs Diagonal)": round(-d_bicc, 2),
+                    "Proposal": "Add Correlation ✓" if is_prop else "Keep Independent"
+                })
+    corr_df = pd.DataFrame(corr_rows)
 
     if not reasons:
-        reasons.append("Mô hình hiện tại đã tối ưu theo ngưỡng kiểm định thống kê (không có đề xuất thay đổi thêm).")
+        reasons.append("Mô hình hiện tại đã đạt BICc tối ưu trên cả 3 thành phần (Error, Covariate, Correlation).")
 
     return {
         "current_error_model": cur_err,
         "proposed_error_model": prop_err,
         "current_cov_model": cur_cov,
         "proposed_cov_model": prop_cov,
+        "proposed_correlations": prop_corrs,
+        "error_table": err_df,
+        "cov_steps_table": cov_steps_df,
+        "corr_table": corr_df,
         "reasons": reasons,
     }

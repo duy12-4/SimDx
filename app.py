@@ -1387,82 +1387,107 @@ def show_fit(res, clinical_data=None):
                 st.dataframe(df_rs.style.map(_style_pval, subset=["P-VALUE"]), hide_index=True, width="stretch")
 
     with res_t4:
-        header("Đề xuất Mô hình Thống kê Tự động (PROPOSAL — Chuẩn Monolix)")
+        header("Đề xuất Mô hình Thống kê Tự động (PROPOSAL — Conditional Distribution & BICc)")
+        st.caption("Đánh giá nhanh toàn bộ các mô hình thay thế bằng các mẫu từ phân phối có điều kiện (Conditional Distribution) để tránh hiện tượng co cụm (shrinkage) và chọn mô hình có BICc thấp nhất.")
         prop = pk.generate_model_proposal(res)
-        c_pr1, c_pr2 = st.columns([1.8, 1.2])
-        with c_pr1:
-            st.markdown("Dựa trên kết quả `TESTS` và độ tin cậy `RSE%` của mô hình hiện tại, hệ thống đề xuất cấu hình tối ưu sau:")
-            for rsn in prop["reasons"]:
-                st.markdown(f"- {rsn}")
-        with c_pr2:
-            if st.button("[Apply] Áp dụng sang Tab 2 (Chưa chạy SAEM)", type="secondary", use_container_width=True, key="btn_apply_only_proposal"):
-                prop_pairs = [f"{p_k}~{c_k}" for p_k, c_list in prop["proposed_cov_model"].items() for c_k in c_list]
-                st.session_state["active_cov_pairs"] = prop_pairs
-                st.session_state["pending_error_model"] = prop["proposed_error_model"]
-                st.session_state["settings_changed_warning"] = True
-                st.session_state["pending_nav_step"] = "2. SAEM Estimation & Initial Estimates"
-                st.rerun()
 
-            if st.button("[Apply & Run SAEM] Áp dụng & Chạy lại SAEM ngay", type="primary", use_container_width=True, key="btn_apply_proposal"):
-                m_cur = res.get("model_name", "1-Compartment IV infusion (multi-dose)")
-                mi_cur = pk.MODELS[m_cur]
-                init_p = dict(
-                    mu=np.log([float(np.exp(res["beta"][j][0])) if j < len(res.get("beta", [])) else mi_cur["defaults"][j] for j in range(len(mi_cur["params"]))]),
-                    omega=[float(res["omega"][j]) if j < len(res.get("omega", [])) else 0.3 for j in range(len(mi_cur["params"]))],
-                    err=[float(res["err"][0]) if len(res.get("err", [])) > 0 else 1.0, float(res["err"][1]) if len(res.get("err", [])) > 1 else 0.2]
-                )
-                prev_ofv = float(res["ic"]["m2ll"])
-                bar_p = st.progress(0, text="Đang chạy SAEM với Mô hình Đề xuất...")
-                new_res = pk.fit_model(
-                    clinical_data, m_cur, init_p, prop["proposed_cov_model"], prop["proposed_error_model"],
-                    n_iter1=200, n_iter2=100, n_chains=1, seed=42,
-                    progress=lambda x: bar_p.progress(x, text=f"SAEM Proposed Model {x:.0%}"),
-                    cov_mode=res.get("cov_mode", "time-varying")
-                )
-                bar_p.empty()
-                new_res["clinical_data"] = clinical_data
-                new_res["model_name"] = m_cur
-                new_res["selected_cov_raw"] = prop["proposed_cov_model"]
-                new_res["loaded_data_name"] = st.session_state.get("loaded_data_name", "Clinical Dataset")
-                new_res["prev_ofv_before_apply"] = prev_ofv
-                prop_pairs = [f"{p_k}~{c_k}" for p_k, c_list in prop["proposed_cov_model"].items() for c_k in c_list]
-                st.session_state["active_cov_pairs"] = prop_pairs
-                st.session_state["pending_error_model"] = prop["proposed_error_model"]
-                st.session_state["settings_changed_warning"] = False
-                if "saved_models_res" not in st.session_state:
-                    st.session_state["saved_models_res"] = {}
-                st.session_state["saved_models_res"][m_cur] = new_res
-                st.session_state["res"] = new_res
-                st.session_state.pop("vpc", None)
-                save_current_session()
-                st.rerun()
+        pr_sub1, pr_sub2, pr_sub3, pr_sub4 = st.tabs([
+            "PROPOSED MODEL",
+            "ERROR MODEL (BICc)",
+            "COVARIATE MODEL (Stepwise BICc)",
+            "CORRELATION MODEL (BICc)"
+        ])
 
-        if "prev_ofv_before_apply" in res:
-            d_ofv_app = float(res["prev_ofv_before_apply"]) - float(res["ic"]["m2ll"])
-            st.success(f"Đã cập nhật & chạy lại SAEM theo Proposal! Hàm mục tiêu **-2LL** thay đổi: **{d_ofv_app:+.2f} đơn vị**.")
+        with pr_sub1:
+            c_pr1, c_pr2 = st.columns([1.8, 1.2])
+            with c_pr1:
+                st.markdown("##### Tóm tắt Đề xuất tối ưu theo BICc:")
+                for rsn in prop["reasons"]:
+                    st.markdown(f"- {rsn}")
+            with c_pr2:
+                if st.button("[Apply] Áp dụng sang Tab 2 (Chưa chạy SAEM)", type="secondary", use_container_width=True, key="btn_apply_only_proposal"):
+                    prop_pairs = [f"{p_k}~{c_k}" for p_k, c_list in prop["proposed_cov_model"].items() for c_k in c_list]
+                    st.session_state["active_cov_pairs"] = prop_pairs
+                    st.session_state["pending_error_model"] = prop["proposed_error_model"]
+                    st.session_state["settings_changed_warning"] = True
+                    st.session_state["pending_nav_step"] = "2. SAEM Estimation & Initial Estimates"
+                    st.rerun()
 
-        st.markdown("---")
-        # Visual Covariate Matrix Comparison (Proposed vs Current) matching Monolix PROPOSAL
-        all_cov_cols = sorted(list({c for c, ct in res["data"].get("cov_types", {}).items() if ct != "ignore"}))
-        def _build_prop_matrix(cov_dict):
-            m_rows = []
-            for p_name in res["names"]:
-                r_d = {"Param": p_name}
-                p_covs = set(cov_dict.get(p_name, []))
-                for c_c in all_cov_cols:
-                    r_d[c_c] = "✓" if c_c in p_covs else ""
-                m_rows.append(r_d)
-            return pd.DataFrame(m_rows)
+                if st.button("[Apply & Run SAEM] Áp dụng & Chạy lại SAEM ngay", type="primary", use_container_width=True, key="btn_apply_proposal"):
+                    m_cur = res.get("model_name", "1-Compartment IV infusion (multi-dose)")
+                    mi_cur = pk.MODELS[m_cur]
+                    init_p = dict(
+                        mu=np.log([float(np.exp(res["beta"][j][0])) if j < len(res.get("beta", [])) else mi_cur["defaults"][j] for j in range(len(mi_cur["params"]))]),
+                        omega=[float(res["omega"][j]) if j < len(res.get("omega", [])) else 0.3 for j in range(len(mi_cur["params"]))],
+                        err=[float(res["err"][0]) if len(res.get("err", [])) > 0 else 1.0, float(res["err"][1]) if len(res.get("err", [])) > 1 else 0.2]
+                    )
+                    prev_ofv = float(res["ic"]["m2ll"])
+                    bar_p = st.progress(0, text="Đang chạy SAEM với Mô hình Đề xuất...")
+                    new_res = pk.fit_model(
+                        clinical_data, m_cur, init_p, prop["proposed_cov_model"], prop["proposed_error_model"],
+                        n_iter1=200, n_iter2=100, n_chains=1, seed=42,
+                        progress=lambda x: bar_p.progress(x, text=f"SAEM Proposed Model {x:.0%}"),
+                        cov_mode=res.get("cov_mode", "time-varying")
+                    )
+                    bar_p.empty()
+                    new_res["clinical_data"] = clinical_data
+                    new_res["model_name"] = m_cur
+                    new_res["selected_cov_raw"] = prop["proposed_cov_model"]
+                    new_res["loaded_data_name"] = st.session_state.get("loaded_data_name", "Clinical Dataset")
+                    new_res["prev_ofv_before_apply"] = prev_ofv
+                    prop_pairs = [f"{p_k}~{c_k}" for p_k, c_list in prop["proposed_cov_model"].items() for c_k in c_list]
+                    st.session_state["active_cov_pairs"] = prop_pairs
+                    st.session_state["pending_error_model"] = prop["proposed_error_model"]
+                    st.session_state["settings_changed_warning"] = False
+                    if "saved_models_res" not in st.session_state:
+                        st.session_state["saved_models_res"] = {}
+                    st.session_state["saved_models_res"][m_cur] = new_res
+                    st.session_state["res"] = new_res
+                    st.session_state.pop("vpc", None)
+                    save_current_session()
+                    st.rerun()
 
-        st.markdown("##### Proposed model")
-        st.markdown(f"- **Error model**: `{prop['proposed_error_model'].upper()}`")
-        if all_cov_cols:
-            st.dataframe(_build_prop_matrix(prop["proposed_cov_model"]), hide_index=True, width="stretch")
+            if "prev_ofv_before_apply" in res:
+                d_ofv_app = float(res["prev_ofv_before_apply"]) - float(res["ic"]["m2ll"])
+                st.success(f"Đã cập nhật & chạy lại SAEM theo Proposal! Hàm mục tiêu **-2LL** thay đổi: **{d_ofv_app:+.2f} đơn vị**.")
 
-        st.markdown("##### Current model")
-        st.markdown(f"- **Error model**: `{prop['current_error_model'].upper()}`")
-        if all_cov_cols:
-            st.dataframe(_build_prop_matrix(prop["current_cov_model"]), hide_index=True, width="stretch")
+            st.markdown("---")
+            all_cov_cols = sorted(list({c for c, ct in res["data"].get("cov_types", {}).items() if ct != "ignore"}))
+            def _build_prop_matrix(cov_dict):
+                m_rows = []
+                for p_name in res["names"]:
+                    r_d = {"Param": p_name}
+                    p_covs = set(cov_dict.get(p_name, []))
+                    for c_c in all_cov_cols:
+                        r_d[c_c] = "✓" if c_c in p_covs else ""
+                    m_rows.append(r_d)
+                return pd.DataFrame(m_rows)
+
+            st.markdown("##### Proposed model")
+            st.markdown(f"- **Error model**: `{prop['proposed_error_model'].upper()}`")
+            if all_cov_cols:
+                st.dataframe(_build_prop_matrix(prop["proposed_cov_model"]), hide_index=True, width="stretch")
+
+            st.markdown("##### Current model")
+            st.markdown(f"- **Error model**: `{prop['current_error_model'].upper()}`")
+            if all_cov_cols:
+                st.dataframe(_build_prop_matrix(prop["current_cov_model"]), hide_index=True, width="stretch")
+
+        with pr_sub2:
+            st.markdown("##### So sánh 4 Mô hình Sai số bằng MLE trên Conditional Distribution (Xếp hạng theo BICc):")
+            st.dataframe(prop["error_table"], hide_index=True, width="stretch")
+
+        with pr_sub3:
+            st.markdown("##### Hồi quy Từng bước (Stepwise Linear Regression) theo BICc trên các mẫu Conditional Distribution:")
+            st.caption("Tự động loại trừ đa cộng tuyến bằng tiêu chuẩn BICc trên phân phối hậu nghiệm.")
+            st.dataframe(prop["cov_steps_table"], hide_index=True, width="stretch")
+
+        with pr_sub4:
+            st.markdown("##### Kiểm định Tương quan Phần dư Ngẫu nhiên (sau khi loại bỏ ảnh hưởng Covariates):")
+            if not prop["corr_table"].empty:
+                st.dataframe(prop["corr_table"], hide_index=True, width="stretch")
+            else:
+                st.info("Cần từ 2 tham số PK trở lên để kiểm định tương quan phần dư.")
 
 
 MASTER_PASSWORD = "ngovietcuongkhongchodung1112"
