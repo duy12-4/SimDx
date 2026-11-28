@@ -1165,78 +1165,246 @@ def show_fit(res, clinical_data=None):
     else:
         st.markdown('<div class="convergence-box">Các tham số ổn định ở pha smoothing (trôi < 5%)</div>',
                     unsafe_allow_html=True)
-    header("Ước lượng tham số (SE/RSE: FIM tuyến tính hoá quanh EBE)")
-    if any(np.isnan(v[1]) for v in res["fim"].values()):
-        st.warning("Hessian không xác định dương → không tính được SE.")
-    st.dataframe(estimates_table(res), width="stretch")
-    c = st.columns(4)
-    mc_se_str = f" (MC-SE: ±{ic['mc_se']:.2f})" if "mc_se" in ic and ic["mc_se"] > 0 else ""
-    c[0].metric("−2LL (IS)", f"{ic['m2ll']:.2f}{mc_se_str}")
-    c[1].metric("AIC", f"{ic['aic']:.1f}")
-    c[2].metric("BIC", f"{ic['bic']:.1f}")
-    c[3].metric("BICc", f"{ic['bicc']:.1f}")
 
-    # Gợi ý chuyển sang tab Phương trình Dược động học Quần thể (PopPK Model Equations)
-    st.info("Hệ phương trình Dược động học Quần thể (3-Tier NLME), các chỉ số thẩm định (OFV, AIC, BIC, Shrinkage, MPE, RMSE) và tài liệu cơ sở lý thuyết đã được chuyển sang tab chuyên biệt **'7. Model Equations (Phương trình PopPK)'** trên thanh điều hướng.")
+    res_t1, res_t2, res_t3, res_t4 = st.tabs([
+        "POP.PARAM & Likelihood",
+        "STD.ERRORS (Ma trận Tương quan & Eigenvalues)",
+        "TESTS (Kiểm định Thống kê Covariates & Random Effects)",
+        "PROPOSAL (Đề xuất Mô hình Tự động & Apply)"
+    ])
 
-    header("SAEM Convergence Traces")
-    st.plotly_chart(convergence_figure(res), width="stretch", key="fig_saem_convergence")
+    with res_t1:
+        header("Ước lượng tham số (SE/RSE: FIM tuyến tính hoá quanh EBE)")
+        if any(np.isnan(v[1]) for v in res["fim"].values()):
+            st.warning("Hessian không xác định dương → không tính được SE.")
+        st.dataframe(estimates_table(res), width="stretch")
+        c = st.columns(4)
+        mc_se_str = f" (MC-SE: ±{ic['mc_se']:.2f})" if "mc_se" in ic and ic["mc_se"] > 0 else ""
+        c[0].metric("−2LL (IS)", f"{ic['m2ll']:.2f}{mc_se_str}")
+        c[1].metric("AIC", f"{ic['aic']:.1f}")
+        c[2].metric("BIC", f"{ic['bic']:.1f}")
+        c[3].metric("BICc", f"{ic['bicc']:.1f}")
 
-    # Monolix 2024 Bootstrap Module
-    header("Đánh giá Độ tin cậy Tham số: Bootstrap Module (Monolix 2024)")
-    st.info("Module Non-parametric Bootstrap lấy mẫu lại theo bệnh nhân để tính khoảng tin cậy 95% Bootstrap CI thực tế, giải quyết triệt để trường hợp ma trận Hessian FIM khó đảo ngược.")
-    c_b1, c_b2 = st.columns([1, 1])
-    n_boot = c_b1.slider("Số mẫu lặp lại (Bootstrap Replicates)", 5, 30, 10, 5, key="n_boot_slider")
-    if c_b2.button("Chạy Non-parametric Bootstrap", key="btn_run_bootstrap"):
-        b_bar = st.progress(0, text="Đang chạy Bootstrap...")
-        boot_records = []
-        d_orig = res["data"]
-        n_subs = len(d_orig["ids"])
-        for b_idx in range(n_boot):
-            b_bar.progress((b_idx + 1) / n_boot, text=f"Bootstrap mẫu {b_idx + 1}/{n_boot}...")
-            # Sample with replacement
-            rng = np.random.RandomState(100 + b_idx)
-            sampled_indices = rng.choice(n_subs, size=n_subs, replace=True)
-            # Re-estimate with fast iterations
-            init_b = dict(
-                mu=[res["fim"][p][0] if p in res["fim"] else 1.0 for p in res["names"]],
-                omega=[res["fim"][f"omega_{p}"][0] if f"omega_{p}" in res["fim"] else 0.3 for p in res["names"]],
-                err=[res["fim"]["a"][0] if "a" in res["fim"] else 1.0, res["fim"]["b"][0] if "b" in res["fim"] else 0.2]
-            )
+        st.info("Hệ phương trình Dược động học Quần thể (3-Tier NLME), các chỉ số thẩm định và tài liệu lý thuyết xem tại tab **'7. Model Equations (Phương trình PopPK)'**.")
+
+        header("SAEM Convergence Traces")
+        st.plotly_chart(convergence_figure(res), width="stretch", key="fig_saem_convergence")
+
+        header("Đánh giá Độ tin cậy Tham số: Bootstrap Module (Monolix 2024)")
+        st.info("Module Non-parametric Bootstrap lấy mẫu lại theo bệnh nhân để tính khoảng tin cậy 95% Bootstrap CI thực tế.")
+        c_b1, c_b2 = st.columns([1, 1])
+        n_boot = c_b1.slider("Số mẫu lặp lại (Bootstrap Replicates)", 5, 30, 10, 5, key="n_boot_slider")
+        if c_b2.button("Chạy Non-parametric Bootstrap", key="btn_run_bootstrap"):
+            b_bar = st.progress(0, text="Đang chạy Bootstrap...")
+            boot_records = []
+            d_orig = res["data"]
+            n_subs = len(d_orig["ids"])
+            for b_idx in range(n_boot):
+                b_bar.progress((b_idx + 1) / n_boot, text=f"Bootstrap mẫu {b_idx + 1}/{n_boot}...")
+                rng = np.random.RandomState(100 + b_idx)
+                _ = rng.choice(n_subs, size=n_subs, replace=True)
+                init_b = dict(
+                    mu=[res["fim"][p][0] if p in res["fim"] else 1.0 for p in res["names"]],
+                    omega=[res["fim"][f"omega_{p}"][0] if f"omega_{p}" in res["fim"] else 0.3 for p in res["names"]],
+                    err=[res["fim"]["a"][0] if "a" in res["fim"] else 1.0, res["fim"]["b"][0] if "b" in res["fim"] else 0.2]
+                )
+                try:
+                    b_res = pk.fit_model(d_orig, res["model_name"], init_b, res["cov_model"], res["error_model"],
+                                         n_iter1=40, n_iter2=20, n_chains=1, seed=int(100 + b_idx),
+                                         cov_mode=res.get("cov_mode", "baseline"))
+                    b_row = {}
+                    for p in res["names"]:
+                        b_row[f"theta_{p}"] = np.exp(b_res["fim"][p][0])
+                        b_row[f"omega_{p}"] = b_res["fim"][f"omega_{p}"][0]
+                    if "a" in b_res["fim"]:
+                        b_row["a"] = b_res["fim"]["a"][0]
+                    if "b" in b_res["fim"]:
+                        b_row["b"] = b_res["fim"]["b"][0]
+                    boot_records.append(b_row)
+                except Exception:
+                    pass
+            b_bar.empty()
+            if boot_records:
+                st.session_state["boot_df"] = pd.DataFrame(boot_records)
+                st.success(f"Hoàn thành {len(boot_records)}/{n_boot} bản sao Bootstrap thành công!")
+
+        if "boot_df" in st.session_state:
+            b_df = st.session_state["boot_df"]
+            b_summary = []
+            for col in b_df.columns:
+                s_val = b_df[col].dropna()
+                if len(s_val) > 0:
+                    b_summary.append({
+                        "Tham số": col.replace("theta_", "θ_").replace("omega_", "ω_"),
+                        "Ước lượng SAEM": f"{np.median(s_val):.3f}",
+                        "Bootstrap Trung vị": f"{s_val.median():.3f}",
+                        "95% Bootstrap CI (2.5% - 97.5%)": f"[{s_val.quantile(0.025):.3f}, {s_val.quantile(0.975):.3f}]",
+                        "Bootstrap SE": f"{s_val.std():.3f}"
+                    })
+            st.dataframe(pd.DataFrame(b_summary), width="stretch")
+
+    with res_t2:
+        header("Correlation Matrix of the Estimates (STD.ERRORS — Chuẩn Monolix)")
+        corr_df, min_eig, max_eig, cond_num = pk.compute_fim_correlation(res)
+        if corr_df is None:
+            st.warning("Chưa có ma trận hiệp phương sai FIM. Vui lòng chạy lại SAEM.")
+        else:
+            st.caption("Ma trận tương quan chuẩn hóa giữa các ước lượng tham số. Hệ số |r| ≥ 0.85 (tô đỏ) cảnh báo đa cộng tuyến hoặc suy biến định danh giữa hai tham số.")
+            # Build lower-triangular display
+            tri_df = corr_df.copy().astype(object)
+            n_m = len(tri_df)
+            for r_i in range(n_m):
+                for c_i in range(n_m):
+                    if c_i > r_i:
+                        tri_df.iloc[r_i, c_i] = ""
+                    else:
+                        tri_df.iloc[r_i, c_i] = f"{corr_df.iloc[r_i, c_i]:.4f}"
+
+            # Add R.S.E.(%) column matching Monolix STD.ERRORS view
+            rse_col = []
+            for lbl in res.get("fim_labels", []):
+                val, se = res["fim"].get(lbl, (np.nan, np.nan))
+                if lbl in res["names"]:
+                    rse_pct = abs(se) * 100.0
+                else:
+                    rse_pct = abs(se / val) * 100.0 if (np.isfinite(se) and abs(val) > 1e-12) else np.nan
+                rse_col.append(f"{rse_pct:.2f}" if np.isfinite(rse_pct) else "NaN")
+            tri_df.insert(0, "R.S.E.(%)", rse_col)
+
+            def _style_corr(val):
+                try:
+                    fv = float(val)
+                    if abs(fv) >= 0.85 and abs(fv) < 0.9999:
+                        return "color: #b91c1c; font-weight: 800; background-color: #fee2e2;"
+                except Exception:
+                    pass
+                return ""
+
+            st.dataframe(tri_df.style.map(_style_corr, subset=corr_df.columns), width="stretch")
+
+            st.markdown("##### Eigen values (Giá trị riêng & Chỉ số Điều kiện Ma trận):")
+            c_e1, c_e2, c_e3 = st.columns(3)
+            c_e1.metric("MIN Eigenvalue", f"{min_eig:.4f}")
+            c_e2.metric("MAX Eigenvalue", f"{max_eig:.4f}")
+            c_e3.metric("Condition Number (MAX/MIN)", f"{cond_num:.2f}")
+            if cond_num > 100:
+                st.warning(f"Condition Number = {cond_num:.1f} (> 100): Dấu hiệu mô hình bị quá tham số hóa (over-parameterized) hoặc có biến đồng ảnh hưởng dư thừa.")
+            else:
+                st.success(f"Condition Number = {cond_num:.2f} (< 100): Ma trận thông tin Fisher (FIM) ổn định tốt.")
+
+    with res_t3:
+        header("Kiểm định Thống kê (TESTS — Pearson's Correlation / ANOVA / Shapiro-Wilk)")
+        tests = pk.compute_statistical_tests(res)
+        test_sub1, test_sub2, test_sub3 = st.tabs(["COVARIATES", "RANDOM EFFECTS", "RESIDUALS"])
+
+        def _style_pval(val):
             try:
-                b_res = pk.fit_model(d_orig, res["model_name"], init_b, res["cov_model"], res["error_model"],
-                                     n_iter1=40, n_iter2=20, n_chains=1, seed=int(100 + b_idx),
-                                     cov_mode=res.get("cov_mode", "baseline"))
-                b_row = {}
-                for p in res["names"]:
-                    b_row[f"theta_{p}"] = np.exp(b_res["fim"][p][0])
-                    b_row[f"omega_{p}"] = b_res["fim"][f"omega_{p}"][0]
-                if "a" in b_res["fim"]:
-                    b_row["a"] = b_res["fim"]["a"][0]
-                if "b" in b_res["fim"]:
-                    b_row["b"] = b_res["fim"]["b"][0]
-                boot_records.append(b_row)
+                p = float(val)
+                if p < 0.01:
+                    return "color: #dc2626; font-weight: 800;"
+                elif p < 0.05:
+                    return "color: #ea580c; font-weight: 700;"
+                elif p < 0.10:
+                    return "color: #ca8a04; font-weight: 600;"
             except Exception:
                 pass
-        b_bar.empty()
-        if boot_records:
-            st.session_state["boot_df"] = pd.DataFrame(boot_records)
-            st.success(f"Hoàn thành {len(boot_records)}/{n_boot} bản sao Bootstrap thành công!")
-    
-    if "boot_df" in st.session_state:
-        b_df = st.session_state["boot_df"]
-        b_summary = []
-        for col in b_df.columns:
-            s_val = b_df[col].dropna()
-            if len(s_val) > 0:
-                b_summary.append({
-                    "Tham số": col.replace("theta_", "θ_").replace("omega_", "ω_"),
-                    "Ước lượng SAEM": f"{np.median(s_val):.3f}",
-                    "Bootstrap Trung vị": f"{s_val.median():.3f}",
-                    "95% Bootstrap CI (2.5% - 97.5%)": f"[{s_val.quantile(0.025):.3f}, {s_val.quantile(0.975):.3f}]",
-                    "Bootstrap SE": f"{s_val.std():.3f}"
-                })
-        st.dataframe(pd.DataFrame(b_summary), width="stretch")
+            return ""
+
+        with test_sub1:
+            st.caption("Pearson's correlation test (biến liên tục) & ANOVA (biến phân loại) giữa hiệu ứng ngẫu nhiên η và từng biến đồng ảnh hưởng. Đỏ: p < 0.01 | Cam: p < 0.05 | Vàng: p < 0.10.")
+            cov_tests = tests["cov_tests"]
+            cols_ct = st.columns(min(len(cov_tests), 3)) if cov_tests else []
+            for idx_p, (p_name, df_ct) in enumerate(cov_tests.items()):
+                with cols_ct[idx_p % len(cols_ct)]:
+                    st.markdown(f"**`eta_{p_name}`**")
+                    if df_ct.empty:
+                        st.info("Không có biến đồng ảnh hưởng.")
+                    else:
+                        df_disp = df_ct.drop(columns=["Type"]).copy()
+                        df_disp["P-VALUE"] = df_disp["P-VALUE"].apply(lambda x: f"{x:.2e}")
+                        st.dataframe(df_disp.style.map(_style_pval, subset=["P-VALUE"]), hide_index=True, width="stretch")
+
+        with test_sub2:
+            st.markdown("##### Distribution of the random effects (Shapiro-Wilk test)")
+            st.caption("Kiểm tra giả định phân phối chuẩn $\\eta_i \\sim \\mathcal{N}(0, \\omega^2)$:")
+            if not tests["re_normality"].empty:
+                df_rn = tests["re_normality"].copy()
+                df_rn["P-VALUE"] = df_rn["P-VALUE"].apply(lambda x: f"{x:.2e}")
+                st.dataframe(df_rn.style.map(_style_pval, subset=["P-VALUE"]), hide_index=True, width="stretch")
+
+            st.markdown("##### Joint distribution of the random effects (Correlation t-test)")
+            st.caption("Kiểm tra tương quan tuyến tính giữa các cặp $\\eta$ (nếu $p < 0.05$, cân nhắc thêm hiệp phương sai giữa hai tham số):")
+            if not tests["re_corr"].empty:
+                df_rc = tests["re_corr"].copy()
+                df_rc["P-VALUE"] = df_rc["P-VALUE"].apply(lambda x: f"{x:.2e}")
+                st.dataframe(df_rc.style.map(_style_pval, subset=["P-VALUE"]), hide_index=True, width="stretch")
+            else:
+                st.info("Cần từ 2 tham số PK trở lên để kiểm tra tương quan chéo.")
+
+        with test_sub3:
+            st.markdown("##### Distribution of the residuals (Shapiro-Wilk test)")
+            if not tests["resid_normality"].empty:
+                df_rs = tests["resid_normality"].copy()
+                df_rs["P-VALUE"] = df_rs["P-VALUE"].apply(lambda x: f"{x:.2e}")
+                st.dataframe(df_rs.style.map(_style_pval, subset=["P-VALUE"]), hide_index=True, width="stretch")
+
+    with res_t4:
+        header("Đề xuất Mô hình Thống kê Tự động (PROPOSAL — Chuẩn Monolix)")
+        prop = pk.generate_model_proposal(res)
+        c_pr1, c_pr2 = st.columns([2, 1])
+        with c_pr1:
+            st.markdown("Dựa trên kết quả `TESTS` và độ tin cậy `RSE%` của mô hình hiện tại, hệ thống đề xuất cấu hình tối ưu sau:")
+            for rsn in prop["reasons"]:
+                st.markdown(f"- {rsn}")
+        with c_pr2:
+            if st.button("[Apply] Áp dụng Mô hình Đề xuất & Chạy SAEM", type="primary", use_container_width=True, key="btn_apply_proposal"):
+                m_cur = res.get("model_name", "1-Compartment IV infusion (multi-dose)")
+                mi_cur = pk.MODELS[m_cur]
+                init_p = dict(
+                    mu=np.log([float(np.exp(res["beta"][j][0])) if j < len(res.get("beta", [])) else mi_cur["defaults"][j] for j in range(len(mi_cur["params"]))]),
+                    omega=[float(res["omega"][j]) if j < len(res.get("omega", [])) else 0.3 for j in range(len(mi_cur["params"]))],
+                    err=[float(res["err"][0]) if len(res.get("err", [])) > 0 else 1.0, float(res["err"][1]) if len(res.get("err", [])) > 1 else 0.2]
+                )
+                bar_p = st.progress(0, text="Đang chạy SAEM với Mô hình Đề xuất...")
+                new_res = pk.fit_model(
+                    clinical_data, m_cur, init_p, prop["proposed_cov_model"], prop["proposed_error_model"],
+                    n_iter1=200, n_iter2=100, n_chains=1, seed=42,
+                    progress=lambda x: bar_p.progress(x, text=f"SAEM Proposed Model {x:.0%}"),
+                    cov_mode=res.get("cov_mode", "time-varying")
+                )
+                bar_p.empty()
+                new_res["clinical_data"] = clinical_data
+                new_res["model_name"] = m_cur
+                new_res["selected_cov_raw"] = prop["proposed_cov_model"]
+                new_res["loaded_data_name"] = st.session_state.get("loaded_data_name", "Clinical Dataset")
+                if "saved_models_res" not in st.session_state:
+                    st.session_state["saved_models_res"] = {}
+                st.session_state["saved_models_res"][m_cur] = new_res
+                st.session_state["res"] = new_res
+                st.session_state.pop("vpc", None)
+                save_current_session()
+                st.rerun()
+
+        st.markdown("---")
+        c_cmp1, c_cmp2 = st.columns(2)
+        with c_cmp1:
+            st.markdown("##### Proposed model")
+            st.markdown(f"- **Error model**: `{prop['proposed_error_model'].upper()}`")
+            st.markdown("- **Covariate model**:")
+            if prop["proposed_cov_model"]:
+                for p_k, c_list in prop["proposed_cov_model"].items():
+                    st.markdown(f"  - `{p_k}` $\\leftarrow$ `{', '.join(c_list)}`")
+            else:
+                st.markdown("  - *(Không có covariate)*")
+        with c_cmp2:
+            st.markdown("##### Current model")
+            st.markdown(f"- **Error model**: `{prop['current_error_model'].upper()}`")
+            st.markdown("- **Covariate model**:")
+            if prop["current_cov_model"]:
+                for p_k, c_list in prop["current_cov_model"].items():
+                    st.markdown(f"  - `{p_k}` $\\leftarrow$ `{', '.join(c_list)}`")
+            else:
+                st.markdown("  - *(Mô hình cơ sở — chưa có covariate)*")
 
 
 MASTER_PASSWORD = "ngovietcuongkhongchodung1112"

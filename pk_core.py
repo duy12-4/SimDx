@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from scipy.special import logsumexp
-from scipy.stats import norm, t as student_t, chi2, linregress, f_oneway
+from scipy.stats import norm, t as student_t, chi2, linregress, f_oneway, shapiro
 
 LOG2PI = np.log(2 * np.pi)
 COVARIATES = ["WT", "AGE", "SEX"]
@@ -1205,6 +1205,8 @@ def compute_fim(res, phi_hat):
     labels = [(f"{names[j]}" if k == 0 else f"beta_{names[j]}_{res['cov_model'].get(names[j], [])[k - 1]}")
               for j in range(P) for k in range(sizes[j])]
     labels += [f"omega_{p}" for p in names] + (["a"] if fa else []) + (["b"] if fb else [])
+    res["fim_cov"] = cov
+    res["fim_labels"] = labels
     return {lab: (th0[i], se[i]) for i, lab in enumerate(labels)}
 
 
@@ -1553,3 +1555,208 @@ def run_auto_scm(df, model_name, init, error_model="combined", cov_mode="time-va
     final_res["delta_ofv_total"] = round(base_ofv - float(final_res["ic"]["m2ll"]), 2)
     _prog(1.0, "Hoàn tất Auto-SCM!")
     return final_res
+
+
+def compute_fim_correlation(res):
+    """
+    Tính Ma trận Tương quan của các Ước lượng Tham số (Correlation matrix of estimates)
+    và Giá trị riêng (Eigenvalues: MIN, MAX, MAX/MIN) tương đương tab STD.ERRORS của Monolix.
+    """
+    cov = res.get("fim_cov")
+    labels = res.get("fim_labels")
+    if cov is None or labels is None or len(labels) == 0:
+        return None, np.nan, np.nan, np.nan
+    d_sd = np.sqrt(np.maximum(np.diag(cov), 1e-16))
+    corr = cov / np.outer(d_sd, d_sd)
+    corr = np.clip(corr, -1.0, 1.0)
+    np.fill_diagonal(corr, 1.0)
+    eigs = np.linalg.eigvalsh(corr)
+    min_eig = float(np.min(eigs))
+    max_eig = float(np.max(eigs))
+    cond_num = float(max_eig / max(min_eig, 1e-12))
+
+    # Format display labels matching Monolix (V_pop, Cl_pop, ...)
+    disp_labels = [f"{l}_pop" if l in res.get("names", []) else l for l in labels]
+    corr_df = pd.DataFrame(corr, index=disp_labels, columns=disp_labels)
+    return corr_df, min_eig, max_eig, cond_num
+
+
+def compute_statistical_tests(res):
+    """
+    Tính bộ kiểm định thống kê chuẩn Monolix (Results > TESTS):
+    1. COVARIATES: Pearson correlation test (continuous) & ANOVA F-test (categorical) cho từng eta_P.
+    2. RANDOM EFFECTS: Shapiro-Wilk test kiểm tra phân phối chuẩn và Correlation t-test giữa các eta.
+    3. RESIDUALS: Shapiro-Wilk test trên IWRES và NPDE.
+    """
+    data = res["data"]
+    names = res["names"]
+    pop_phi = pop_mean_phi(res)
+    etas = res["phi_hat"] - pop_phi
+    cov_types = data.get("cov_types", data.get("detected_covariates", {}))
+    bdf = data["baseline_cov"]
+
+    # 1. Covariate tests per parameter
+    cov_tests = {}
+    for j, p in enumerate(names):
+        eta_p = etas[:, j]
+        rows = []
+        for c, ctype in cov_types.items():
+            if ctype == "ignore":
+                continue
+            col_key = c if c in bdf.columns else (f"{c}_base" if f"{c}_base" in bdf.columns else None)
+            if col_key is None:
+                continue
+            if ctype == "continuous":
+                xv = pd.to_numeric(bdf[col_key], errors="coerce").values.astype(float)
+                valid = np.isfinite(xv) & np.isfinite(eta_p)
+                n_v = int(valid.sum())
+                if n_v > 3 and np.std(xv[valid]) > 1e-8:
+                    lr = linregress(xv[valid], eta_p[valid])
+                    r_val = float(lr.rvalue)
+                    t_stat = float(r_val * np.sqrt((n_v - 2) / max(1.0 - r_val**2, 1e-12)))
+                    pval = float(lr.pvalue)
+                    rows.append({
+                        "Covariate": c,
+                        "Type": "continuous",
+                        "COEFF": round(r_val, 3),
+                        "STATISTICS": round(t_stat, 2),
+                        "P-VALUE": pval
+                    })
+            elif ctype == "categorical":
+                cats = bdf[col_key].fillna("NA").astype(str).str.replace(r"\.0$", "", regex=True)
+                grps = [eta_p[(cats == lvl).values] for lvl in cats.unique() if (cats == lvl).sum() >= 2]
+                if len(grps) >= 2:
+                    f_stat, pval = f_oneway(*grps)
+                    rows.append({
+                        "Covariate": c,
+                        "Type": "categorical",
+                        "COEFF": np.nan,
+                        "STATISTICS": round(float(f_stat), 2) if np.isfinite(f_stat) else np.nan,
+                        "P-VALUE": float(pval) if np.isfinite(pval) else 1.0
+                    })
+        df_ct = pd.DataFrame(rows)
+        if not df_ct.empty:
+            df_ct = df_ct.sort_values("P-VALUE").reset_index(drop=True)
+        cov_tests[p] = df_ct
+
+    # 2. Random effects normality (Shapiro-Wilk)
+    re_norm_rows = []
+    for j, p in enumerate(names):
+        eta_p = etas[:, j]
+        valid = eta_p[np.isfinite(eta_p)]
+        if 3 <= len(valid) <= 5000:
+            w_stat, pval = shapiro(valid)
+            re_norm_rows.append({
+                "Random Effect": f"eta_{p}",
+                "STATISTICS (W)": round(float(w_stat), 3),
+                "P-VALUE": float(pval)
+            })
+    re_norm_df = pd.DataFrame(re_norm_rows)
+
+    # 3. Joint distribution of random effects (Correlation t-test)
+    re_corr_rows = []
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            e1, e2 = etas[:, i], etas[:, j]
+            valid = np.isfinite(e1) & np.isfinite(e2)
+            n_v = int(valid.sum())
+            if n_v > 3 and np.std(e1[valid]) > 1e-8 and np.std(e2[valid]) > 1e-8:
+                lr = linregress(e1[valid], e2[valid])
+                r_val = float(lr.rvalue)
+                t_stat = float(r_val * np.sqrt((n_v - 2) / max(1.0 - r_val**2, 1e-12)))
+                re_corr_rows.append({
+                    "Pair": f"eta_{names[i]} ~ eta_{names[j]}",
+                    "COEFF (r)": round(r_val, 3),
+                    "STATISTICS (t)": round(t_stat, 2),
+                    "P-VALUE": float(lr.pvalue)
+                })
+    re_corr_df = pd.DataFrame(re_corr_rows)
+
+    # 4. Residuals normality (Shapiro-Wilk on IWRES, NPDE)
+    resid_rows = []
+    if "diag" in res and "table" in res["diag"]:
+        tt = res["diag"]["table"]
+        for col in ["IWRES", "NPDE"]:
+            if col in tt.columns:
+                vals = tt[col].dropna().values
+                if 3 <= len(vals) <= 5000:
+                    w_stat, pval = shapiro(vals)
+                    resid_rows.append({
+                        "Residual": col,
+                        "STATISTICS (W)": round(float(w_stat), 3),
+                        "P-VALUE": float(pval)
+                    })
+    resid_df = pd.DataFrame(resid_rows)
+
+    return {
+        "cov_tests": cov_tests,
+        "re_normality": re_norm_df,
+        "re_corr": re_corr_df,
+        "resid_normality": resid_df,
+    }
+
+
+def generate_model_proposal(res):
+    """
+    Tạo Đề xuất Mô hình Thống kê Tự động (tương đương Results > PROPOSAL của Monolix):
+    1. Error Model: Đề xuất chuyển sang 'proportional' nếu 'a' (additive) có RSE% > 50% hoặc giá trị quá nhỏ.
+    2. Covariate Model: Dựa trên bảng TESTS (p < 0.05), chọn tối đa 1 đại diện mạnh nhất mỗi nhóm sinh lý
+       (Chức năng thận / Kích thước cơ thể) + các biến độc lập (GEN, Sepsis, Age, Albumin...).
+    """
+    cur_err = res.get("error_model", "combined")
+    prop_err = cur_err
+    reasons = []
+
+    fim = res.get("fim", {})
+    if cur_err in ["combined", "combined1"] and "a" in fim:
+        a_val, a_se = fim["a"]
+        a_rse = (a_se / abs(a_val) * 100) if (np.isfinite(a_se) and abs(a_val) > 1e-6) else 999.0
+        if a_rse > 50.0 or a_val < 0.15:
+            prop_err = "proportional"
+            reasons.append(f"Error model: Đề xuất chuyển `{cur_err}` → `proportional` (do sai số cộng `a = {a_val:.3f}` có RSE = {a_rse:.1f}% > 50%, không cần thiết).")
+
+    # Physiological collinearity groups
+    renal_grp = {"CLCr_CG", "CLCr_Je", "eGFR_CKD_EPI", "Creatinine"}
+    size_grp = {"TBW", "BSA", "AdBW", "Dosing weight", "Dosing_weight", "IBW", "BMI", "Height"}
+
+    tests = compute_statistical_tests(res)
+    cov_tests = tests["cov_tests"]
+
+    cur_cov = res.get("selected_cov_raw") or res.get("cov_model", {})
+    prop_cov = {p: list(v) for p, v in cur_cov.items() if v}
+
+    for p, df_ct in cov_tests.items():
+        if df_ct.empty:
+            continue
+        existing = set(prop_cov.get(p, []))
+        has_renal = bool(existing & renal_grp)
+        has_size = bool(existing & size_grp)
+
+        sig_rows = df_ct[df_ct["P-VALUE"] < 0.05]
+        for _, row in sig_rows.iterrows():
+            c_name = row["Covariate"]
+            pval = float(row["P-VALUE"])
+            if c_name in existing:
+                continue
+            if c_name in renal_grp:
+                if has_renal:
+                    continue
+                has_renal = True
+            elif c_name in size_grp:
+                if has_size:
+                    continue
+                has_size = True
+            prop_cov.setdefault(p, []).append(c_name)
+            existing.add(c_name)
+            reasons.append(f"Covariate `{p}~{c_name}`: Tương quan mạnh trên `eta_{p}` (p = {pval:.2e} < 0.05).")
+
+    if not reasons:
+        reasons.append("Mô hình hiện tại đã tối ưu theo ngưỡng kiểm định thống kê (không có đề xuất thay đổi thêm).")
+
+    return {
+        "current_error_model": cur_err,
+        "proposed_error_model": prop_err,
+        "current_cov_model": cur_cov,
+        "proposed_cov_model": prop_cov,
+        "reasons": reasons,
+    }
