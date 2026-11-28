@@ -67,11 +67,22 @@ class TestSimDxUI(unittest.TestCase):
                 self.assertEqual(str(m.value), "278")
 
     def test_app_full_fit_and_all_tabs(self):
-        """Kiểm tra toàn bộ 5 tab sau khi chạy SAEM."""
+        """Kiểm tra toàn bộ quy trình: Data -> SAEM -> Tự động chuyển Results."""
         at = AppTest.from_file(self.app_path, default_timeout=180)
         at.session_state["authenticated"] = True
         at.run()
         self.assertEqual(len(at.exception), 0)
+
+        # Chọn dataset lâm sàng
+        data_radio = [r for r in at.radio if "Chọn dữ liệu" in (r.label or "")][0]
+        data_radio.set_value("Dataset lâm sàng (Dataset_chính_thức.xlsx)").run()
+        self.assertEqual(len(at.exception), 0)
+
+        # Bấm nút 'Tiếp tục: Cấu hình & Chạy SAEM →'
+        btn_goto = [b for b in at.button if "Tiếp tục: Cấu hình & Chạy SAEM" in (b.label or "")]
+        self.assertTrue(len(btn_goto) > 0)
+        btn_goto[0].click().run()
+        self.assertEqual(at.session_state.get("nav_step"), "2. SAEM Estimation & Initial Estimates")
 
         # Tìm button 'Bắt đầu ước lượng SAEM'
         run_buttons = [b for b in at.button if "Bắt đầu ước lượng SAEM" in b.label]
@@ -82,6 +93,8 @@ class TestSimDxUI(unittest.TestCase):
 
         self.assertEqual(len(at.exception), 0, f"Exceptions after running SAEM: {at.exception}")
         self.assertIn("res", at.session_state)
+        # Kiểm tra tự động chuyển sang Results
+        self.assertEqual(at.session_state.get("nav_step"), "3. Results & Population parameters")
 
 if __name__ == "__main__":
     unittest.main()

@@ -144,6 +144,36 @@ st.markdown("""
         box-shadow: 0 2px 8px rgba(0, 151, 167, 0.08);
     }
 
+    
+    /* Monolix Sidebar Workflow Navigation */
+    .stSidebar [data-testid="stRadio"] > div[role="radiogroup"] {
+        gap: 6px;
+    }
+    .stSidebar [data-testid="stRadio"] label {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 8px 12px;
+        margin-bottom: 2px;
+        transition: all 0.15s ease-in-out;
+        cursor: pointer;
+    }
+    .stSidebar [data-testid="stRadio"] label:hover {
+        border-color: #0284c7;
+        background-color: #f0f9ff;
+    }
+    .stSidebar [data-testid="stRadio"] label:has(input:checked) {
+        background-color: #0284c7 !important;
+        border-color: #0284c7 !important;
+        color: #ffffff !important;
+        font-weight: 700;
+        box-shadow: 0 2px 6px rgba(2, 132, 199, 0.25);
+    }
+    .stSidebar [data-testid="stRadio"] label:has(input:checked) p {
+        color: #ffffff !important;
+        font-weight: 700 !important;
+    }
+
     /* Monolix-Style Workflow Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 4px;
@@ -1211,6 +1241,27 @@ def auto_estimate_initial_params(clinical_data, model_name):
 
 def main():
     check_authentication()
+    
+    # ── ĐỒNG BỘ TRẠNG THÁI CHUYỂN TAB TỰ ĐỘNG ──
+    if "nav_step" not in st.session_state:
+        st.session_state["nav_step"] = "1. Data"
+
+    # Kiểm tra chuyển tab từ các nút điều hướng
+    if "pending_nav_step" in st.session_state:
+        next_step = st.session_state.pop("pending_nav_step")
+        st.session_state["nav_step"] = next_step
+        st.session_state["sidebar_nav_radio"] = next_step
+
+    # Danh mục các Tab điều hướng bên tay trái theo chuẩn Monolix
+    NAV_OPTIONS = [
+        "1. Data",
+        "2. SAEM Estimation & Initial Estimates",
+        "3. Results & Population parameters",
+        "4. Diagnostic Plots (GOF)",
+        "5. Individual fits (EBE)",
+        "6. Covariates & Simulx"
+    ]
+
     with st.sidebar:
         logo_html = (
             f'<img src="data:image/png;base64,{LOGO_B64}" '
@@ -1231,10 +1282,27 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
+        st.markdown("### Quy trình phân tích (Workflow)")
+        def on_nav_change():
+            st.session_state["nav_step"] = st.session_state["sidebar_nav_radio"]
+
+        cur_idx = NAV_OPTIONS.index(st.session_state["nav_step"]) if st.session_state["nav_step"] in NAV_OPTIONS else 0
+        val_arg = None if "sidebar_nav_radio" in st.session_state else cur_idx
+        selected_nav = st.radio(
+            "Chọn bước phân tích",
+            NAV_OPTIONS,
+            index=val_arg,
+            key="sidebar_nav_radio",
+            on_change=on_nav_change,
+            label_visibility="collapsed"
+        )
+        st.session_state["nav_step"] = selected_nav
+
+        st.markdown("---")
         st.markdown("### Nguồn dữ liệu")
         data_source_opt = st.radio(
             "Chọn dữ liệu",
-            ["Dataset lâm sàng (Dataset_chính_thức.xlsx)", "Tải lên file (Excel/CSV)", "Mô phỏng quần thể (Simulation)"]
+            ["Tải lên file (Excel/CSV)", "Dataset lâm sàng (Dataset_chính_thức.xlsx)", "Mô phỏng quần thể (Simulation)"]
         )
 
         clinical_data = None
@@ -1243,17 +1311,8 @@ def main():
         selected_lib_id = st.session_state.get("selected_lib_model", "")
         is_bolus_mode = str(selected_lib_id).startswith("bolus_")
 
-        if data_source_opt == "Dataset lâm sàng (Dataset_chính_thức.xlsx)":
-            excel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dataset_chính_thức.xlsx"))
-            if is_bolus_mode:
-                tinf = 0.01
-                st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
-            else:
-                tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_main_input")
-            clinical_data = data_io.load_dataset(excel_path, tinf=tinf, enforce_g4=True)
-            default_model = "1-Compartment IV infusion (multi-dose)"
-        elif data_source_opt == "Tải lên file (Excel/CSV)":
-            uploaded_file = st.file_uploader("Tải lên file dữ liệu", type=["xlsx", "xls", "csv"])
+        if data_source_opt == "Tải lên file (Excel/CSV)":
+            uploaded_file = st.file_uploader("Tải lên file dữ liệu lâm sàng", type=["xlsx", "xls", "csv"], key="uploader_data_file")
             if is_bolus_mode:
                 tinf = 0.01
                 st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
@@ -1271,14 +1330,22 @@ def main():
                     clinical_data = None
                     default_model = "1-Compartment IV infusion (multi-dose)"
             else:
-                st.info("Hãy tải lên file dataset để bắt đầu.")
                 default_model = "1-Compartment IV infusion (multi-dose)"
+        elif data_source_opt == "Dataset lâm sàng (Dataset_chính_thức.xlsx)":
+            excel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dataset_chính_thức.xlsx"))
+            if is_bolus_mode:
+                tinf = 0.01
+                st.caption(f"Chế độ Monolix {selected_lib_id}: tinf = 0.01 h (Bolus tức thời)")
+            else:
+                tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_main_input")
+            clinical_data = data_io.load_dataset(excel_path, tinf=tinf, enforce_g4=True)
+            default_model = "1-Compartment IV infusion (multi-dose)"
         else:
             default_model = "1-Compartment (Oral)"
 
         # Monolix Library Section
         st.markdown("### Thư viện mô hình Monolix")
-        if st.button("LOAD FROM LIBRARY", type="primary", use_container_width=True, help="Mở thư viện mô hình Dược động học chuẩn Monolix (bolus_1cpt_VCl, infusion_1cpt_VCl, ...)"):
+        if st.button("LOAD FROM LIBRARY", type="primary", use_container_width=True, help="Mở thư viện mô hình Dược động học chuẩn Monolix"):
             show_model_library_dialog()
 
         if "selected_lib_model" in st.session_state:
@@ -1292,7 +1359,6 @@ def main():
         st.markdown("### Cấu hình mô hình")
         model_names = list(pk.MODELS.keys())
 
-        # Luôn đồng bộ mô hình khi có model được chọn từ thư viện Monolix
         if "selected_lib_model" in st.session_state:
             lib_id = st.session_state["selected_lib_model"]
             lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
@@ -1393,22 +1459,39 @@ def main():
             st.session_state["authenticated"] = False
             st.rerun()
 
-    # ── GIAO DIỆN CHUẨN MONOLIX THEO QUY TRÌNH 4 BƯỚC ──
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "1. Data",
-        "2. Structural model & Initial estimates",
-        "3. SAEM Estimation",
-        "4. Results & Population parameters",
-        "5. Diagnostic Plots (GOF)",
-        "6. Individual fits (EBE)",
-        "7. Covariates & Simulx"
-    ])
-
     res = st.session_state.get("res")
+    current_tab = st.session_state.get("nav_step", "1. Data")
 
-    # ── BƯỚC 1: NHẬP VÀ KIỂM TRA FILE DỮ LIỆU (DATA) ──
-    with tab1:
-        if clinical_data is not None:
+    # ── MÀN HÌNH 1: DATA (NHẬP VÀ THẨM ĐỊNH DỮ LIỆU) ──
+    if current_tab == "1. Data":
+        if clinical_data is None:
+            header("Nạp bộ dữ liệu nghiên cứu (Data Import Required)")
+            st.markdown("""
+            <div style="background:#f8fafc;border:2px dashed #94a3b8;border-radius:12px;padding:36px;text-align:center;margin:20px 0;">
+                <h3 style="color:#0f172a;margin-bottom:8px;font-weight:700;">Chưa có dữ liệu nào được nạp</h3>
+                <p style="color:#64748b;font-size:14px;max-width:550px;margin:0 auto 20px auto;">
+                    Vui lòng chọn <b>"Tải lên file (Excel/CSV)"</b> ở thanh bên trái hoặc chọn tập dữ liệu mẫu <b>Dataset_chính_thức.xlsx</b> để bắt đầu quy trình phân tích Dược động học.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            c_guide1, c_guide2 = st.columns(2)
+            with c_guide1:
+                st.markdown("""
+                **Cấu trúc file dữ liệu chuẩn Monolix:**
+                - `ID`: Mã định danh bệnh nhân duy nhất
+                - `Time`: Thời điểm đo hoặc đưa liều (giờ)
+                - `DV`: Nồng độ đo được (mg/L, để trống ở dòng liều)
+                - `Amt`: Liều dùng (mg, 0 hoặc để trống ở dòng nồng độ)
+                """)
+            with c_guide2:
+                st.markdown("""
+                **Các cột Covariate lâm sàng (nếu có):**
+                - `CLCr_CG`: Độ thanh thải Creatinine Cockcroft-Gault (mL/min)
+                - `TBW`: Cân nặng thực tế (kg)
+                - `Age`: Tuổi bệnh nhân (năm)
+                - `Sepsis`: Tình trạng nhiễm khuẩn huyết (0/1)
+                """)
+        else:
             header("Bộ dữ liệu lâm sàng thực tế")
             c = st.columns(4)
             c[0].metric("Bệnh nhân", clinical_data["N"])
@@ -1418,7 +1501,16 @@ def main():
 
             st.markdown('<div class="convergence-box"><b>Gate G4 Strictly Verified:</b> 565 dòng / 83 bệnh nhân / 287 liều / 278 quan sát DV. Không có trùng lặp (ID, Time).</div>', unsafe_allow_html=True)
 
-            if clinical_data["outliers"]:
+            # Nút chuyển nhanh sang Bước 2
+            c_go1, c_go2 = st.columns([1.5, 1])
+            with c_go1:
+                st.success("Dữ liệu đã sẵn sàng! Bạn có thể tiếp tục sang bước Ước lượng khởi tạo và chạy SAEM.")
+            with c_go2:
+                if st.button("Tiếp tục: Cấu hình & Chạy SAEM →", type="primary", use_container_width=True, key="btn_goto_saem"):
+                    st.session_state["pending_nav_step"] = "2. SAEM Estimation & Initial Estimates"
+                    st.rerun()
+
+            if clinical_data.get("outliers"):
                 st.markdown('<div class="outlier-box"><b>Các điểm ngoại lai (Outliers) được đánh dấu cờ (Flagged):</b> Giữ nguyên 100% trong phân tích theo chuẩn quy trình lâm sàng, không xóa hoặc winsorize.</div>', unsafe_allow_html=True)
                 st.dataframe(pd.DataFrame(clinical_data["outliers"]), width="stretch")
 
@@ -1472,28 +1564,25 @@ def main():
             out_csv, _ = data_io.export_monolix(clinical_data)
             with open(out_csv, "rb") as f:
                 st.download_button("Tải file Monolix CSV (export_monolix.csv)", f.read(), "export_monolix.csv", "text/csv")
-        else:
-            header("Mô phỏng quần thể ảo")
-            n_sub_sim = st.slider("Số bệnh nhân mô phỏng", 10, 100, 30, 5)
-            dose_sim = st.number_input("Liều dùng (mg)", 10.0, 2000.0, 100.0, 50.0)
-            df_sim, _ = make_sim_data(model_name, tuple(pop_params.items()), tuple(omega_dict.items()),
-                                      sigma_add, sigma_prop, (), n_sub_sim, dose_sim, tuple(T_GRID), len(T_GRID), 42)
-            st.dataframe(df_sim.head(50), width="stretch")
 
-    # ── BƯỚC 2: CHỌN MÔ HÌNH & CHẠY AUTO-ESTIMATE (STRUCTURAL MODEL & INITIAL ESTIMATES) ──
-    with tab2:
-        header(f"Mô hình Cấu trúc & Thông số Khởi tạo: {model_name}")
+    # ── MÀN HÌNH 2: SAEM ESTIMATION & INITIAL ESTIMATES (TÍCH HỢP MÔ HÌNH, AUTO-ESTIMATE VÀ CHẠY SAEM) ──
+    elif current_tab == "2. SAEM Estimation & Initial Estimates":
         target_data = clinical_data if clinical_data is not None else df_sim
-        
-        c_m1, c_m2 = st.columns([1.5, 1])
-        with c_m1:
-            st.markdown(f"**Tên mô hình thư viện Monolix**: `{st.session_state.get('selected_lib_model', 'Tùy chỉnh')}`")
-            st.markdown(f"**Cấu hình phân bố**: `{model_name}` | **Thời gian truyền $t_{{inf}}$**: `{tinf:.2f} h`")
-            lib_id = st.session_state.get("selected_lib_model")
-            lib_entry = next((m for m in MONOLIX_LIBRARY if m["id"] == lib_id), None)
-            if lib_entry:
-                st.caption(f"{lib_entry.get('desc', '')}")
-                mlx_code = f"""; Monolix Model Definition: {lib_id}
+        if target_data is None:
+            st.warning("Vui lòng tải hoặc nạp dữ liệu ở bước 1. Data trước khi cấu hình và chạy SAEM.")
+        else:
+            header(f"Ước lượng SAEM & Khởi tạo Tham số: {model_name}")
+
+            # Khung 2 cột: Cột trái (Thông tin mô hình & Code Monolix) | Cột phải (Setup SAEM & Chạy)
+            col_l, col_r = st.columns([1.2, 1.0])
+            with col_l:
+                st.markdown(f"**Tên mô hình thư viện Monolix**: `{st.session_state.get('selected_lib_model', 'Tùy chỉnh')}`")
+                st.markdown(f"**Cấu hình phân bố**: `{model_name}` | **Thời gian truyền $t_{{inf}}$**: `{tinf:.2f} h`")
+                lib_id = st.session_state.get("selected_lib_model")
+                lib_entry = next((m for m in MONOLIX_LIBRARY if m["id"] == lib_id), None)
+                if lib_entry:
+                    st.caption(f"{lib_entry.get('desc', '')}")
+                    mlx_code = f"""; Monolix Model Definition: {lib_id}
 [LONGITUDINAL]
 input = {{{', '.join(lib_entry['params'])}}}
 
@@ -1503,100 +1592,91 @@ PK:
 OUTPUT:
 output = {{Cc}}
 """
-                with st.expander("Xem mã nguồn mô hình định dạng Monolix (.txt)", expanded=True):
-                    st.code(mlx_code, language="text")
-            else:
-                st.info(f"Mô hình cấu trúc: {model_name}")
+                    with st.expander("Xem mã nguồn mô hình định dạng Monolix (.txt)", expanded=False):
+                        st.code(mlx_code, language="text")
 
-        with c_m2:
-            st.markdown("**Các thông số quần thể ban đầu ($	heta_0$):**")
-            for p in names:
-                st.markdown(rf"- **$	heta_{{{p}}}$**: `{pop_params[p]:.3f} {units_dict.get(p, '')}` (Biến thiên $\omega$: `{omega_dict[p]:.2f}`)")
+            with col_r:
+                st.markdown("**Các thông số quần thể ban đầu ($	heta_0$):**")
+                for p in names:
+                    st.markdown(rf"- **$	heta_{{{p}}}$**: `{pop_params[p]:.3f} {units_dict.get(p, '')}` (Biến thiên $\omega$: `{omega_dict[p]:.2f}`)")
 
-        # Section Auto-estimate Vd, Cl chuẩn Monolix
-        header("Tự động ước lượng thông số Vd, Cl dự kiến (Auto-estimate)")
-        st.info("Tính năng Auto-estimate chuẩn Monolix: phân tích nhanh dữ liệu lâm sàng bằng NCA để ước lượng trước độ thanh thải CL, thể tích phân bố Vd và thời gian bán thải t1/2, tự động gán vào điểm khởi tạo θ₀ cho thuật toán SAEM.")
-        
-        c_auto1, c_auto2 = st.columns([1.2, 1.8])
-        with c_auto1:
-            if st.button("Tự động ước lượng Vd, Cl dự kiến (Auto-estimate)", type="primary", use_container_width=True, key="btn_auto_estimate"):
+            # Khối Auto-estimate Vd, Cl
+            header("Tự động ước lượng thông số Vd, Cl dự kiến (Auto-estimate)")
+            c_auto1, c_auto2 = st.columns([1.2, 1.8])
+            with c_auto1:
+                if st.button("Tự động ước lượng Vd, Cl dự kiến (Auto-estimate)", type="secondary", use_container_width=True, key="btn_auto_estimate"):
+                    est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
+                    pending_dict = {}
+                    for p_name, p_val in est_dict.items():
+                        val_k = key(f"pop_{p_name}")
+                        pending_dict[val_k] = float(p_val)
+                    st.session_state["pending_auto_estimates"] = pending_dict
+                    st.rerun()
+
+            with c_auto2:
                 est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
-                pending_dict = {}
-                for p_name, p_val in est_dict.items():
-                    val_k = key(f"pop_{p_name}")
-                    pending_dict[val_k] = float(p_val)
-                st.session_state["pending_auto_estimates"] = pending_dict
+                t_half_nca = np.log(2) * vd_val / cl_val if cl_val > 0 else 0.0
+                col_e1, col_e2, col_e3 = st.columns(3)
+                col_e1.metric("CL dự kiến (NCA)", f"{cl_val:.2f} L/h")
+                col_e2.metric("Vd dự kiến (NCA)", f"{vd_val:.2f} L")
+                col_e3.metric("t1/2 dự kiến", f"{t_half_nca:.1f} h")
+
+            if st.session_state.get("auto_estimated_flag", False):
+                st.success("Đã cập nhật tự động các giá trị khởi tạo Vd, Cl vào thông số ban đầu.")
+
+            # Trực quan hóa đường cong khởi tạo
+            header("Biểu đồ Trực quan hóa Thông số Khởi tạo đè lên Dữ liệu (Visual Initial Estimates vs Data)")
+            fig_init = initial_estimates_preview_figure(target_data, model_name, pop_params)
+            st.plotly_chart(fig_init, width="stretch")
+
+            # Khối Chạy SAEM
+            header(f"Chạy ước lượng tham số SAEM: {model_name}")
+            c_saem_cfg1, c_saem_cfg2, c_saem_cfg3 = st.columns(3)
+            c_saem_cfg1.metric("Pha 1 (Exploratory)", f"{n_iter1} iterations")
+            c_saem_cfg2.metric("Pha 2 (Smoothing)", f"{n_iter2} iterations")
+            c_saem_cfg3.metric("Số chains / Seed", f"{n_chains} chain(s) / {fit_seed}")
+
+            if st.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main"):
+                init = dict(
+                    mu=np.log([pop_params[p] for p in names]),
+                    omega=[omega_dict[p] for p in names],
+                    err=[sigma_add, sigma_prop]
+                )
+                bar = st.progress(0, text="Đang chạy SAEM...")
+                res = pk.fit_model(target_data, model_name, init, cov_model, error_model,
+                                   n_iter1=n_iter1, n_iter2=n_iter2, n_chains=n_chains,
+                                   seed=int(fit_seed), progress=lambda x: bar.progress(x, text=f"SAEM {x:.0%}"),
+                                   cov_mode=cov_mode)
+                bar.empty()
+                st.session_state["res"] = res
+                st.session_state.pop("vpc", None)
+                # TỰ ĐỘNG CHUYỂN SANG TAB RESULTS
+                st.session_state["pending_nav_step"] = "3. Results & Population parameters"
                 st.rerun()
 
-        with c_auto2:
-            est_dict, cl_val, vd_val = auto_estimate_initial_params(clinical_data, model_name)
-            t_half_nca = np.log(2) * vd_val / cl_val if cl_val > 0 else 0.0
-            col_e1, col_e2, col_e3 = st.columns(3)
-            col_e1.metric("CL dự kiến (NCA)", f"{cl_val:.2f} L/h")
-            col_e2.metric("Vd dự kiến (NCA)", f"{vd_val:.2f} L")
-            col_e3.metric("t1/2 dự kiến", f"{t_half_nca:.1f} h")
+            if res is not None:
+                st.info("Mô hình đã được ước lượng thành công. Vui lòng chuyển sang mục Results & Population parameters để xem chi tiết.")
 
-        if st.session_state.get("auto_estimated_flag", False):
-            st.success("Đã cập nhật tự động các giá trị khởi tạo Vd, Cl vào thông số ban đầu. Chuyển sang Tab 3 để bắt đầu ước lượng SAEM.")
-
-        header("Biểu đồ Trực quan hóa Thông số Khởi tạo đè lên Dữ liệu (Visual Initial Estimates vs Data)")
-        st.info("Đường cong dự đoán quần thể tương ứng với các giá trị $	heta_0$ ban đầu đè lên dữ liệu bệnh nhân thực tế, giúp đánh giá trực quan điểm khởi tạo trước khi chạy SAEM.")
-        fig_init = initial_estimates_preview_figure(target_data, model_name, pop_params)
-        st.plotly_chart(fig_init, width="stretch")
-
-    # ── BƯỚC 3: CHẠY SAEM VỚI CÁC THÔNG SỐ DỰ KIẾN (SAEM ESTIMATION) ──
-    with tab3:
-        header(f"Chạy ước lượng tham số SAEM: {model_name}")
-        target_data = clinical_data if clinical_data is not None else df_sim
-        st.info(f"Đang phân tích mô hình: **{model_name}**. Thuật toán SAEM với MCMC 3 kernel kết hợp giải tích từng đoạn. Tính toán -2LL qua Importance Sampling phân phối Student-t5.")
-        
-        c_saem_cfg1, c_saem_cfg2, c_saem_cfg3 = st.columns(3)
-        c_saem_cfg1.metric("Pha 1 (Exploratory)", f"{n_iter1} iterations")
-        c_saem_cfg2.metric("Pha 2 (Smoothing)", f"{n_iter2} iterations")
-        c_saem_cfg3.metric("Số chains / Seed", f"{n_chains} chain(s) / {fit_seed}")
-
-        if st.button(f"Bắt đầu ước lượng SAEM ({model_name})", type="primary", use_container_width=True, key="btn_run_saem_main"):
-            init = dict(
-                mu=np.log([pop_params[p] for p in names]),
-                omega=[omega_dict[p] for p in names],
-                err=[sigma_add, sigma_prop]
-            )
-            bar = st.progress(0, text="Đang chạy SAEM...")
-            res = pk.fit_model(target_data, model_name, init, cov_model, error_model,
-                               n_iter1=n_iter1, n_iter2=n_iter2, n_chains=n_chains,
-                               seed=int(fit_seed), progress=lambda x: bar.progress(x, text=f"SAEM {x:.0%}"),
-                               cov_mode=cov_mode)
-            bar.empty()
-            st.session_state["res"] = res
-            st.session_state.pop("vpc", None)
-            st.success("Ước lượng SAEM hoàn thành thành công! Hãy chuyển sang Tab 4 để xem bảng tham số và phân tích sâu.")
-            st.rerun()
-
-        if res is not None:
-            st.info("Mô hình đã được ước lượng thành công. Vui lòng chuyển sang Tab 4 (Results & Population parameters) để xem bảng tham số chi tiết, sai số chuẩn SE và đường cong hội tụ.")
-
-    # ── BƯỚC 4: KẾT QUẢ QUẦN THỂ & PHÂN TÍCH SÂU (RESULTS) ──
-    with tab4:
+    # ── MÀN HÌNH 3: RESULTS & POPULATION PARAMETERS ──
+    elif current_tab == "3. Results & Population parameters":
         header("Kết quả Ước lượng Tham số Quần thể (Population Parameter Estimates)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
+            st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
         else:
             show_fit(res, clinical_data)
 
-    # ── TAB 5: CHẨN ĐOÁN GOF & OUTLIERS ──
-    with tab5:
+    # ── MÀN HÌNH 4: DIAGNOSTIC PLOTS (GOF) ──
+    elif current_tab == "4. Diagnostic Plots (GOF)":
         header("Chẩn đoán mô hình (Goodness-of-Fit & Residuals Distribution)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
+            st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
         else:
             dg = res["diag"]
             st.plotly_chart(gof_figure(dg), width="stretch")
             
-            # QQ plots of residuals
             header("Chẩn đoán Phân phối Phần dư (Normal QQ-Plots)")
             st.plotly_chart(residuals_qq_figure(dg), width="stretch")
 
-            # Random Effects Correlation Heatmap
             header("Ma trận Tương quan Hiệu ứng Ngẫu nhiên (Random Effects Correlation)")
             st.plotly_chart(parameter_correlation_heatmap(res), width="stretch")
 
@@ -1610,7 +1690,6 @@ output = {{Cc}}
             cols[P].metric("Shrinkage IWRES", f"{eps_val * 100:.1f}%")
             cols[P + 1].metric("NPDE mean / sd", f"{dg['table']['NPDE'].mean():.2f} / {dg['table']['NPDE'].std():.2f}")
 
-            # Residual & Outliers table
             header("Phân tích Phần dư & Ngoại lai Chẩn đoán (Flagged Residuals)")
             tt = dg["table"]
             flagged = tt[(tt["IWRES"].abs() > 3.0) | (tt["NPDE"].abs() > 3.0)]
@@ -1622,11 +1701,11 @@ output = {{Cc}}
             else:
                 st.markdown('<div class="convergence-box">Tuyệt vời: Không có điểm quan sát nào có |IWRES| > 3 hoặc |NPDE| > 3. Dữ liệu khớp rất tốt với mô hình.</div>', unsafe_allow_html=True)
 
-    # ── TAB 6: KHỚP CÁ THỂ (INDIVIDUAL FITS) ──
-    with tab6:
+    # ── MÀN HÌNH 5: INDIVIDUAL FITS (EBE) ──
+    elif current_tab == "5. Individual fits (EBE)":
         header("Đường cong nồng độ cá thể (Individual Fits)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
+            st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
         else:
             d = res["data"]
             sid_choice = st.selectbox("Chọn bệnh nhân (ID)", d["ids"], key="select_patient_tab6")
@@ -1638,7 +1717,6 @@ output = {{Cc}}
             phi_ind = res["phi_hat"][idx_sub:idx_sub + 1]
             phi_pop = pk.pop_mean_phi(res)[idx_sub:idx_sub + 1]
             
-            # Show individual parameters dynamically
             num_params = len(res["names"])
             c_ind = st.columns(min(num_params * 2, 8))
             for j, p in enumerate(res["names"]):
@@ -1676,7 +1754,6 @@ output = {{Cc}}
                                   height=450, template="plotly_white")
             st.plotly_chart(fig_ind, width="stretch")
 
-            # Bảng tổng hợp EBE và thông số từng cá thể cho toàn bộ 83 bệnh nhân
             header("Bảng Tổng hợp Thông số Dược động học Cá thể (Individual Parameters Table)")
             ebe_rows = []
             for i, sid in enumerate(d["ids"]):
@@ -1692,11 +1769,11 @@ output = {{Cc}}
             st.download_button("Tải file CSV Thông số Cá thể (individual_parameters.csv)",
                                csv_ebe, "individual_parameters.csv", "text/csv", key="btn_download_ebe_csv")
 
-    # ── TAB 7: SÀNG LỌC COVARIATE & MÔ PHỎNG SIMULX ──
-    with tab7:
+    # ── MÀN HÌNH 6: COVARIATES & SIMULX ──
+    elif current_tab == "6. Covariates & Simulx":
         header("Sàng lọc Covariate & Mô hình Tối ưu (Covariate Search & SCM)")
         if res is None:
-            st.warning("Vui lòng chạy SAEM ở Bước 3 trước.")
+            st.warning("Vui lòng chạy SAEM ở bước 2 trước.")
         else:
             header("Tương quan giữa Hiệu ứng Ngẫu nhiên (η̂ = EBE) và Covariate")
             fig_cov = covariate_correlation_figure(res, clinical_data)
@@ -1715,7 +1792,6 @@ output = {{Cc}}
                     st.dataframe(cov_df, width="stretch")
                 st.info("Bạn đang làm việc với tập dữ liệu tải lên riêng biệt. Để kiểm định các giả thuyết covariate cho tập dữ liệu này, hãy chọn các covariate mong muốn ở thanh bên và bấm 'Bắt đầu ước lượng SAEM' để so sánh giá trị -2LL (ΔOFV) và AIC.")
 
-            # Population Model Equations
             header("Phương trình Dược động học Quần thể (Population Model Equations)")
             render_dynamic_model_equations(res, clinical_data, show_scm_benchmark=True)
 
@@ -1729,7 +1805,6 @@ output = {{Cc}}
                 v, pc = st.session_state["vpc"]
                 st.plotly_chart(vpc_figure(v, None if pc else res["diag"]["table"]), width="stretch")
 
-            # Simulx Module
             header("Mô phỏng Phác đồ Điều trị Lâm sàng & Đích TDM (Simulx Module)")
             st.info("Mô phỏng động học nồng độ theo thời gian cho phác đồ đa liều dựa trên mô hình quần thể, đánh giá tỷ lệ đạt nồng độ đáy mục tiêu (15 - 20 mg/L) và AUC24/MIC ≥ 400.")
             
@@ -1738,7 +1813,6 @@ output = {{Cc}}
             p_clcr = c_p2.number_input("Chức năng thận CLCr (mL/min)", 10.0, 200.0, 80.0, 5.0, key="sim_clcr")
             p_sep = c_p3.selectbox("Nhiễm khuẩn huyết (Sepsis)", ["Không (Non-Sepsis)", "Có (Sepsis)"], key="sim_sep")
             
-            # Predict CL and V dynamically using estimated parameters from res
             cl_base = float(np.exp(res["beta"][0][0])) if len(res.get("beta", [])) > 0 else 3.0
             v_base = float(np.exp(res["beta"][1][0])) if len(res.get("beta", [])) > 1 else 21.0
             
@@ -1770,11 +1844,9 @@ output = {{Cc}}
             
             t_sim, c_sim, ct_ss, cpk_ss, auc24_ss = simulx_dosing_simulation(cl_patient, v_patient, reg_dose, reg_tau, reg_tinf, duration=72.0)
             
-            # Plot simulation profile
             fig_sim = go.Figure()
             fig_sim.add_trace(go.Scatter(x=t_sim, y=c_sim, mode="lines",
                                          line=dict(color="#1565c0", width=2.5), name="Nồng độ mô phỏng"))
-            # Target range band for trough 15-20 mg/L
             fig_sim.add_hrect(y0=15.0, y1=20.0, fillcolor="rgba(76, 175, 80, 0.2)", line_width=0, name="Dải đích Trough (15-20 mg/L)")
             fig_sim.add_hline(y=15.0, line_dash="dash", line_color="green")
             fig_sim.add_hline(y=20.0, line_dash="dash", line_color="green")
@@ -1783,14 +1855,12 @@ output = {{Cc}}
                                   xaxis_title="Thời gian (giờ)", yaxis_title="Nồng độ (mg/L)", height=450, template="plotly_white")
             st.plotly_chart(fig_sim, width="stretch")
             
-            # Metrics
             m_c1, m_c2, m_c3, m_c4 = st.columns(4)
             m_c1.metric("Nồng độ đáy Ctrough (ss)", f"{ct_ss:.2f} mg/L")
             m_c2.metric("Nồng độ đỉnh Cpeak (ss)", f"{cpk_ss:.2f} mg/L")
             m_c3.metric("Tổng liều 24h", f"{reg_dose * (24.0 / reg_tau):.0f} mg")
             m_c4.metric("AUC24 / MIC (MIC=1)", f"{auc24_ss:.1f}")
             
-            # Clinical guidance
             if 15.0 <= ct_ss <= 20.0 and auc24_ss >= 400.0:
                 st.markdown('<div class="convergence-box">ĐẠT ĐÍCH TỐI ƯU: Nồng độ đáy (15 - 20 mg/L) và AUC24/MIC ≥ 400 đều đạt mục tiêu hướng dẫn lâm sàng IDSA/ASHP.</div>', unsafe_allow_html=True)
             elif ct_ss > 20.0:
@@ -1798,7 +1868,6 @@ output = {{Cc}}
             else:
                 st.markdown('<div class="outlier-box">CẢNH BÁO DƯỚI ĐÍCH ĐIỀU TRỊ: Nồng độ đáy < 15 mg/L hoặc AUC24/MIC < 400, có nguy cơ thất bại điều trị hoặc chọn lọc vi khuẩn kháng thuốc. Khuyến cáo tăng liều hoặc rút ngắn khoảng cách đưa liều.</div>', unsafe_allow_html=True)
 
-            # R script generator
             header("Mã nguồn R Tự động phục vụ Nghiên cứu Khoa học (Reproducible R Script)")
             st.info("Xuất trọn bộ mã nguồn phân tích R chuẩn mực để đính kèm bài báo khoa học hoặc nghiệm thu đề tài, tương thích với RStudio.")
             r_code = generate_r_script(res)
