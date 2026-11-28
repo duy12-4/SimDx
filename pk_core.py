@@ -1390,17 +1390,51 @@ def run_auto_scm(df, model_name, init, error_model="combined", cov_mode="time-va
                 candidates.append((pval, p, c, df_c))
 
     candidates.sort(key=lambda x: x[0])
+    # Balance across parameters: pick up to 3 strongest per parameter (max 5 total)
+    balanced = []
+    per_param_count = {p: 0 for p in names}
+    for cand in candidates:
+        _, p_c, _, _ = cand
+        if per_param_count[p_c] < 3:
+            balanced.append(cand)
+            per_param_count[p_c] += 1
+        if len(balanced) >= 5:
+            break
+    candidates = balanced if balanced else candidates[:5]
     # Fallback: if no candidate < 0.25, test top physiological pairs if present
     if not candidates:
         for p, c in [("CL", "CLCr_CG"), ("V", "TBW"), ("CL", "Age"), ("CL", "Sepsis"), ("CL", "GEN")]:
             if p in names and c in cov_types and cov_types[c] != "ignore":
                 df_c = max(len(cat_info.get(c, {}).get("dummies", [])), 1)
                 candidates.append((0.5, p, c, df_c))
-    candidates = candidates[:8]
+    candidates = candidates[:5]
+
+    # Warm-start from Base Model parameters for fast screening
+    warm_init = {
+        "mu": [float(base_res["beta"][j][0]) for j in range(len(names))],
+        "omega": [float(base_res["omega"][j]) for j in range(len(names))],
+        "err": [float(base_res["err"][0]), float(base_res["err"][1])],
+    }
 
     def _fit_fast(cov_m):
-        return fit_model(df, model_name, init, cov_m, error_model=error_model,
-                         n_iter1=90, n_iter2=45, n_chains=1, seed=seed, n_is=600, cov_mode=cov_mode)
+        # Expand multi-level categorical covariates into dummy columns
+        exp_cov = {}
+        for p_k, covs in (cov_m or {}).items():
+            exp_list = []
+            for c_k in covs:
+                if c_k in cat_info and cat_info[c_k].get("dummies"):
+                    for d_name, _ in cat_info[c_k]["dummies"]:
+                        exp_list.append(d_name)
+                elif c_k in data["cov"]:
+                    exp_list.append(c_k)
+            if exp_list:
+                exp_cov[p_k] = exp_list
+        # Ultra-fast warm-started screening: SAEM (25+15) + EBE + IS (150)
+        r_s = run_saem(data, model_name, warm_init, exp_cov, error_model=error_model,
+                       n_iter1=25, n_iter2=15, n_chains=1, seed=seed)
+        r_s["phi_hat"] = compute_ebe(r_s)
+        ll_val, _ = loglik_is(r_s, n_is=150)
+        return float(-2.0 * ll_val)
 
     def _df_for_pair(c):
         return max(len(cat_info.get(c, {}).get("dummies", [])), 1)
@@ -1421,18 +1455,18 @@ def run_auto_scm(df, model_name, init, error_model="combined", cov_mode="time-va
     step_idx = 1
 
     while remaining:
-        _prog(min(0.20 + 0.08 * step_idx, 0.70), f"Forward Inclusion vòng {step_idx}...")
         best_gain = -1.0
         best_cand = None
         best_ofv = curr_ofv
         best_crit = 3.841
 
-        for p, c, df_c in remaining:
+        for c_i, (p, c, df_c) in enumerate(remaining):
+            _prog(min(0.20 + 0.12 * (step_idx - 1) + 0.02 * c_i, 0.72),
+                  f"Forward vòng {step_idx}: kiểm tra {p}~{c} ({c_i + 1}/{len(remaining)})...")
             test_cov = {k: list(v) for k, v in curr_cov.items()}
             test_cov.setdefault(p, []).append(c)
             try:
-                r_test = _fit_fast(test_cov)
-                ofv_t = float(r_test["ic"]["m2ll"])
+                ofv_t = _fit_fast(test_cov)
                 gain = curr_ofv - ofv_t
                 crit = float(chi2.ppf(1.0 - p_forward, df_c))
                 if gain > best_gain:
@@ -1464,7 +1498,6 @@ def run_auto_scm(df, model_name, init, error_model="combined", cov_mode="time-va
     # 3. Backward Elimination (p < p_backward)
     b_step = 1
     while any(len(v) > 0 for v in curr_cov.values()):
-        _prog(min(0.72 + 0.05 * b_step, 0.85), f"Backward Elimination vòng {b_step}...")
         active_pairs = [(p, c) for p, clist in curr_cov.items() for c in clist]
         if len(active_pairs) == 0:
             break
@@ -1473,12 +1506,13 @@ def run_auto_scm(df, model_name, init, error_model="combined", cov_mode="time-va
         worst_ofv = curr_ofv
         worst_crit = 6.635
 
-        for p, c in active_pairs:
+        for b_i, (p, c) in enumerate(active_pairs):
+            _prog(min(0.75 + 0.04 * b_i, 0.88),
+                  f"Backward vòng {b_step}: kiểm tra rút {p}~{c} ({b_i + 1}/{len(active_pairs)})...")
             test_cov = {k: [x for x in v if not (k == p and x == c)] for k, v in curr_cov.items()}
             test_cov = {k: v for k, v in test_cov.items() if v}
             try:
-                r_test = _fit_fast(test_cov)
-                ofv_t = float(r_test["ic"]["m2ll"])
+                ofv_t = _fit_fast(test_cov)
                 loss = ofv_t - curr_ofv
                 df_c = _df_for_pair(c)
                 crit = float(chi2.ppf(1.0 - p_backward, df_c))

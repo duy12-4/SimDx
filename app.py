@@ -2000,10 +2000,14 @@ output = {{Cc}}
                         )
                         cov_mode_run = st.session_state.get("main_cov_mode", "time-varying")
                         err_model_run = st.session_state.get("main_error_model_select", "combined")
+                        existing_base = st.session_state.get("saved_models_res", {}).get(model_name)
+                        if existing_base is not None and any(len(v) > 0 for v in existing_base.get("cov_model", {}).values()):
+                            existing_base = None
                         bar = st.progress(0, text="Đang chạy Auto-SCM sàng lọc toàn bộ Covariates...")
                         res = pk.run_auto_scm(
                             clinical_data, model_name, init, error_model=err_model_run,
                             cov_mode=cov_mode_run, seed=int(fit_seed),
+                            base_res=existing_base,
                             progress=lambda x, m="": bar.progress(min(max(float(x), 0.0), 1.0), text=m or f"Auto-SCM {x:.0%}")
                         )
                         bar.empty()
