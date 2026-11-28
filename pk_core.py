@@ -844,7 +844,11 @@ def prepare_data(data_source, cov_model=None, cov_mode="time-varying"):
 
             if ctype == "continuous":
                 vals = pd.to_numeric(bdf[col_key], errors="coerce").values.astype(float)
-                med = float(np.nanmedian(vals)) if np.any(np.isfinite(vals)) else 1.0
+                custom_refs = d.get("custom_ref_medians", {})
+                if c in custom_refs and float(custom_refs[c]) > 0:
+                    med = float(custom_refs[c])
+                else:
+                    med = float(np.nanmedian(vals)) if np.any(np.isfinite(vals)) else 1.0
                 if not np.isfinite(med) or med <= 0:
                     med = 1.0
                 vals = np.where(np.isfinite(vals), vals, med)

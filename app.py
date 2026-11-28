@@ -2136,7 +2136,8 @@ output = {{Cc}}
                             err=[float(st.session_state.get("main_sigma_a", 1.0)), float(st.session_state.get("main_sigma_b", 0.2))]
                         )
                         cov_model_run = {}
-                        for s in st.session_state.get("main_cov_select", []):
+                        sel_pairs = st.session_state.get("active_cov_pairs") or st.session_state.get("main_cov_select", [])
+                        for s in sel_pairs:
                             p_cov, c_cov = s.split("~")
                             cov_model_run.setdefault(p_cov, []).append(c_cov)
                         cov_mode_run = st.session_state.get("main_cov_mode", "time-varying")
@@ -2234,15 +2235,58 @@ output = {{Cc}}
                     sigma_add = col_err_a.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1, key="main_sigma_a")
                     sigma_prop = col_err_b.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02, key="main_sigma_b")
 
-                    st.markdown("##### Covariate lâm sàng & Di truyền (Dynamic):")
+                    st.markdown("##### Individual Model — Ma trận Covariate (Chuẩn Monolix):")
                     active_covs = [c for c, ct in clinical_data.get("cov_types", clinical_data.get("detected_covariates", {})).items() if ct != "ignore"]
                     if not active_covs:
-                        cov_opts = ["CL~CLCr_CG", "V~TBW", "CL~Sepsis", "V~Sepsis", "CL~Age"]
+                        ordered_covs = ["CLCr_CG", "TBW", "Sepsis", "Age"]
                     else:
-                        priority_covs = ["CLCr_CG", "TBW", "Sepsis", "Age", "GEN", "Albumin", "Bilirubin", "Sex"]
+                        priority_covs = ["CLCr_CG", "TBW", "BSA", "Sepsis", "Age", "GEN", "Albumin", "Bilirubin", "Sex"]
                         ordered_covs = [c for c in priority_covs if c in active_covs] + [c for c in active_covs if c not in priority_covs]
-                        cov_opts = [f"{p}~{c}" for p in names for c in ordered_covs]
-                    cov_sel = st.multiselect("Hiệu ứng covariate (tự động từ Column Mapping)", cov_opts, default=[], key="main_cov_select")
+
+                    cur_pairs = set(st.session_state.get("active_cov_pairs", []))
+                    mat_rows = []
+                    for p in names:
+                        row_m = {"Parameter": p}
+                        for c_col in ordered_covs:
+                            row_m[c_col] = (f"{p}~{c_col}" in cur_pairs)
+                        mat_rows.append(row_m)
+                    df_mat = pd.DataFrame(mat_rows)
+                    col_cfg = {"Parameter": st.column_config.TextColumn("PARAMETERS", disabled=True)}
+                    for c_col in ordered_covs:
+                        col_cfg[c_col] = st.column_config.CheckboxColumn(c_col, default=False)
+
+                    edited_mat = st.data_editor(
+                        df_mat,
+                        column_config=col_cfg,
+                        hide_index=True,
+                        use_container_width=True,
+                        key=f"cov_matrix_editor_{model_name}"
+                    )
+                    new_pairs = []
+                    for _, mr in edited_mat.iterrows():
+                        p_r = mr["Parameter"]
+                        for c_col in ordered_covs:
+                            if bool(mr[c_col]):
+                                new_pairs.append(f"{p_r}~{c_col}")
+                    st.session_state["active_cov_pairs"] = new_pairs
+
+                    with st.expander("Add Covariate — Chuẩn hóa giá trị tham chiếu log(Cov / Ref)", expanded=False):
+                        cont_covs = [c for c in ordered_covs if clinical_data.get("cov_types", {}).get(c) == "continuous"]
+                        if cont_covs:
+                            c_ref1, c_ref2 = st.columns([1.4, 1.0])
+                            ref_cov = c_ref1.selectbox("Biến liên tục", cont_covs, key="custom_ref_cov_sel")
+                            bdf_cur = clinical_data.get("baseline_cov")
+                            def_med = float(np.nanmedian(pd.to_numeric(bdf_cur[ref_cov if ref_cov in bdf_cur.columns else f"{ref_cov}_base"], errors="coerce"))) if bdf_cur is not None else 70.0
+                            cur_custom = clinical_data.get("custom_ref_medians", {}).get(ref_cov, def_med)
+                            new_ref_val = c_ref2.number_input("Giá trị tham chiếu (Ref)", 0.1, 1000.0, float(round(cur_custom, 1)), 1.0, key="custom_ref_val_input")
+                            if st.button("Áp dụng giá trị tham chiếu", key="btn_apply_custom_ref", use_container_width=True):
+                                clinical_data.setdefault("custom_ref_medians", {})[ref_cov] = float(new_ref_val)
+                                st.session_state["clinical_data"] = clinical_data
+                                save_current_session()
+                                st.success(f"Đã đặt chuẩn hóa `log({ref_cov} / {new_ref_val:.1f})`!")
+                        else:
+                            st.info("Chưa có biến liên tục nào được kích hoạt.")
+
                     cov_mode = st.radio("Chế độ Covariate", ["time-varying", "baseline"], horizontal=True, key="main_cov_mode")
 
     elif current_tab == "3. Results & Population parameters":
