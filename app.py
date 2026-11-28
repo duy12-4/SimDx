@@ -1168,11 +1168,12 @@ def show_fit(res, clinical_data=None):
         st.markdown('<div class="convergence-box">Các tham số ổn định ở pha smoothing (trôi < 5%)</div>',
                     unsafe_allow_html=True)
 
-    res_t1, res_t2, res_t3, res_t4 = st.tabs([
-        "POP.PARAM & Likelihood",
-        "STD.ERRORS (Ma trận Tương quan & Eigenvalues)",
-        "TESTS (Kiểm định Thống kê Covariates & Random Effects)",
-        "PROPOSAL (Đề xuất Mô hình Tự động & Apply)"
+    res_t1, res_t2, res_t_ll, res_t3, res_t4 = st.tabs([
+        "POP.PARAM",
+        "STD.ERRORS (Correlation & Eigenvalues)",
+        "LIKELIHOOD (Importance Sampling)",
+        "TESTS (Covariates & Random Effects)",
+        "PROPOSAL (Apply Model)"
     ])
 
     with res_t1:
@@ -1293,6 +1294,41 @@ def show_fit(res, clinical_data=None):
                 st.warning(f"Condition Number = {cond_num:.1f} (> 100): Dấu hiệu mô hình bị quá tham số hóa (over-parameterized) hoặc có biến đồng ảnh hưởng dư thừa.")
             else:
                 st.success(f"Condition Number = {cond_num:.2f} (< 100): Ma trận thông tin Fisher (FIM) ổn định tốt.")
+
+    with res_t_ll:
+        header("Estimated log-likelihood and information criteria (IMPORTANCE SAMPLING)")
+        ic_cur = res["ic"]
+        mc_se_val = float(ic_cur.get("mc_se", res.get("mc_se", 0.0)))
+        n_is_cur = int(res.get("n_is_used", 1500))
+
+        ll_table = pd.DataFrame([
+            {"Tiêu chuẩn (Criteria)": "-2 x log-likelihood (OFV)", "Importance Sampling": f"{ic_cur['m2ll']:.2f}"},
+            {"Tiêu chuẩn (Criteria)": "Akaike Information Criteria (AIC)", "Importance Sampling": f"{ic_cur['aic']:.2f}"},
+            {"Tiêu chuẩn (Criteria)": "Bayesian Information Criteria (BIC)", "Importance Sampling": f"{ic_cur['bic']:.2f}"},
+            {"Tiêu chuẩn (Criteria)": "Corrected Bayesian Information Criteria (BICc)", "Importance Sampling": f"{ic_cur['bicc']:.2f}"},
+        ])
+        st.dataframe(ll_table, hide_index=True, width="stretch")
+
+        samp_table = pd.DataFrame([
+            {"Thông số Lấy mẫu (Sampling Info)": "Sampling Distribution", "Giá trị": "T-distribution with 5 degrees of freedom"},
+            {"Thông số Lấy mẫu (Sampling Info)": "Standard Error (MC-SE)", "Giá trị": f"{mc_se_val:.4f}"},
+            {"Thông số Lấy mẫu (Sampling Info)": "MonteCarlo size (iterations)", "Giá trị": f"{n_is_cur}"},
+        ])
+        st.dataframe(samp_table, hide_index=True, width="stretch")
+
+        st.markdown("---")
+        c_is1, c_is2 = st.columns([1.2, 1.0])
+        new_nis = c_is1.select_slider("Tăng kích thước mẫu Monte Carlo (Importance Sampling size)", options=[1500, 3000, 5000, 10000], value=n_is_cur if n_is_cur in [1500, 3000, 5000, 10000] else 1500, key="sel_is_size")
+        if c_is2.button("Tính lại Importance Sampling", type="secondary", use_container_width=True, key="btn_recompute_is"):
+            with st.spinner(f"Đang chạy Importance Sampling ({new_nis} mẫu)..."):
+                ll_new, se_new = pk.loglik_is(res, n_is=int(new_nis))
+                res["ll"] = ll_new
+                res["mc_se"] = se_new
+                res["n_is_used"] = int(new_nis)
+                res["ic"] = pk.information_criteria(res, ll_new, se_new)
+                st.session_state["res"] = res
+                save_current_session()
+                st.rerun()
 
     with res_t3:
         header("Kiểm định Thống kê (TESTS — Pearson's Correlation / ANOVA / Shapiro-Wilk)")
