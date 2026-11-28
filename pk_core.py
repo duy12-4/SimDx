@@ -173,6 +173,125 @@ def solve_2cpt_oral_multidose(doses, t_obs, ka, V1, CL, Q, V2):
     return out[0] if scalar else out
 
 
+def solve_3cpt_iv_multidose(doses, default_tinf, t_obs, V1, CL, Q2, V2, Q3, V3):
+    """
+    Bộ giải đa liều giải tích chính xác cho 3-ngăn IV (Bolus và Infusion).
+    Sử dụng phân rã trị riêng (eigen-decomposition) và nguyên lý xếp chồng nồng độ.
+    """
+    t_obs = np.asarray(t_obs, dtype=float)
+    scalar = (t_obs.ndim == 0)
+    if scalar:
+        t_obs = t_obs.reshape(1)
+    out = np.zeros(len(t_obs), dtype=float)
+    
+    k10 = CL / max(V1, 1e-6)
+    k12 = Q2 / max(V1, 1e-6)
+    k21 = Q2 / max(V2, 1e-6)
+    k13 = Q3 / max(V1, 1e-6)
+    k31 = Q3 / max(V3, 1e-6)
+    
+    K = np.array([
+        [-(k10 + k12 + k13), k21, k31],
+        [k12, -k21, 0.0],
+        [k13, 0.0, -k31]
+    ])
+    try:
+        eigvals, eigvecs = np.linalg.eig(-K)
+        idx = np.argsort(eigvals)[::-1]
+        lam = np.maximum(np.real(eigvals[idx]), 1e-9)
+        V_mat = np.real(eigvecs[:, idx])
+        inv_V = np.linalg.inv(V_mat)
+        c_unit = inv_V @ np.array([1.0, 0.0, 0.0])
+        A = (c_unit * V_mat[0, :]) / max(V1, 1e-6)
+    except Exception:
+        return out
+        
+    for d in doses:
+        td = float(d[0])
+        amt = float(d[1])
+        ti = float(d[2]) if len(d) > 2 else float(default_tinf)
+        if amt <= 0:
+            continue
+        if ti <= 0.02:
+            dt = t_obs - td
+            mask = dt >= 0
+            if np.any(mask):
+                dt_m = dt[mask]
+                conc_d = np.zeros(len(dt_m))
+                for i in range(3):
+                    conc_d += amt * A[i] * np.exp(-lam[i] * dt_m)
+                out[mask] += conc_d
+        else:
+            R = amt / ti
+            dt = t_obs - td
+            mask_inf = (dt >= 0) & (dt <= ti)
+            mask_post = dt > ti
+            if np.any(mask_inf):
+                dt_i = dt[mask_inf]
+                conc_i = np.zeros(len(dt_i))
+                for i in range(3):
+                    conc_i += (R * A[i] / lam[i]) * (1.0 - np.exp(-lam[i] * dt_i))
+                out[mask_inf] += conc_i
+            if np.any(mask_post):
+                dt_p = dt[mask_post]
+                conc_p = np.zeros(len(dt_p))
+                for i in range(3):
+                    factor = (R * A[i] / lam[i]) * (1.0 - np.exp(-lam[i] * ti))
+                    conc_p += factor * np.exp(-lam[i] * (dt_p - ti))
+                out[mask_post] += conc_p
+    return out[0] if scalar else out
+
+
+def solve_3cpt_oral_multidose(doses, t_obs, ka, V1, CL, Q2, V2, Q3, V3):
+    """Bộ giải đa liều giải tích chính xác cho 3-ngăn đường uống (Oral hấp thu bậc 1)."""
+    t_obs = np.asarray(t_obs, dtype=float)
+    scalar = (t_obs.ndim == 0)
+    if scalar:
+        t_obs = t_obs.reshape(1)
+    out = np.zeros(len(t_obs), dtype=float)
+    
+    k10 = CL / max(V1, 1e-6)
+    k12 = Q2 / max(V1, 1e-6)
+    k21 = Q2 / max(V2, 1e-6)
+    k13 = Q3 / max(V1, 1e-6)
+    k31 = Q3 / max(V3, 1e-6)
+    
+    K = np.array([
+        [-(k10 + k12 + k13), k21, k31],
+        [k12, -k21, 0.0],
+        [k13, 0.0, -k31]
+    ])
+    try:
+        eigvals, eigvecs = np.linalg.eig(-K)
+        idx = np.argsort(eigvals)[::-1]
+        lam = np.maximum(np.real(eigvals[idx]), 1e-9)
+        V_mat = np.real(eigvecs[:, idx])
+        inv_V = np.linalg.inv(V_mat)
+        c_unit = inv_V @ np.array([1.0, 0.0, 0.0])
+        A = (c_unit * V_mat[0, :]) / max(V1, 1e-6)
+    except Exception:
+        return out
+        
+    for d in doses:
+        td = float(d[0])
+        amt = float(d[1])
+        if amt <= 0:
+            continue
+        dt = t_obs - td
+        mask = dt >= 0
+        if np.any(mask):
+            dt_m = dt[mask]
+            conc_d = np.zeros(len(dt_m))
+            for i in range(3):
+                denom = ka - lam[i]
+                if abs(denom) > 1e-6:
+                    conc_d += amt * ka * A[i] * (np.exp(-lam[i] * dt_m) - np.exp(-ka * dt_m)) / denom
+                else:
+                    conc_d += amt * ka * A[i] * dt_m * np.exp(-ka * dt_m)
+            out[mask] += conc_d
+    return out[0] if scalar else out
+
+
 def solve_mm_multidose(doses, t_obs, V, Vmax, Km):
     """Bộ giải đa liều phi tuyến bão hòa Michaelis-Menten qua bước nhảy liều và nghiệm Lambert-W."""
     t_obs = np.asarray(t_obs, dtype=float)
@@ -312,13 +431,29 @@ MODELS = {
     "1-Compartment (Oral)": dict(fn=model_1cpt_oral, params=["ka", "V", "CL"],
                                  defaults=[1.2, 20.0, 5.0], units=["1/h", "L", "L/h"],
                                  ranges=[(0.1, 5.0), (5.0, 100.0), (1.0, 30.0)]),
+    "1-Compartment (Oral with Tlag)": dict(fn=None, params=["Tlag", "ka", "V", "CL"],
+                                           defaults=[0.5, 1.2, 20.0, 5.0], units=["h", "1/h", "L", "L/h"],
+                                           ranges=[(0.01, 5.0), (0.1, 5.0), (5.0, 100.0), (1.0, 30.0)]),
     "1-Compartment (IV Bolus)": dict(fn=model_1cpt_iv, params=["V", "CL"],
                                      defaults=[20.0, 5.0], units=["L", "L/h"],
                                      ranges=[(5.0, 100.0), (1.0, 30.0)]),
+    "1-Compartment (IV Infusion)": dict(fn=None, params=["V", "CL"],
+                                        defaults=[20.0, 5.0], units=["L", "L/h"],
+                                        ranges=[(5.0, 100.0), (1.0, 30.0)]),
+    "1-Compartment (IV Bolus - Rate k)": dict(fn=None, params=["V", "k"],
+                                              defaults=[20.0, 0.25], units=["L", "1/h"],
+                                              ranges=[(5.0, 100.0), (0.01, 2.0)]),
+    "1-Compartment (IV Infusion - Rate k)": dict(fn=None, params=["V", "k"],
+                                                 defaults=[20.0, 0.25], units=["L", "1/h"],
+                                                 ranges=[(5.0, 100.0), (0.01, 2.0)]),
     "2-Compartment (Oral)": dict(fn=model_2cpt_oral, params=["ka", "V1", "CL", "Q", "V2"],
                                  defaults=[1.2, 15.0, 4.0, 8.0, 40.0],
                                  units=["1/h", "L", "L/h", "L/h", "L"],
                                  ranges=[(0.1, 5.0), (5.0, 50.0), (1.0, 20.0), (1.0, 30.0), (10.0, 150.0)]),
+    "2-Compartment (Oral with Tlag)": dict(fn=None, params=["Tlag", "ka", "V1", "CL", "Q", "V2"],
+                                           defaults=[0.5, 1.2, 15.0, 4.0, 8.0, 40.0],
+                                           units=["h", "1/h", "L", "L/h", "L/h", "L"],
+                                           ranges=[(0.01, 5.0), (0.1, 5.0), (5.0, 50.0), (1.0, 20.0), (1.0, 30.0), (10.0, 150.0)]),
     "2-Compartment (IV Infusion)": dict(fn=model_2cpt_iv, params=["V1", "CL", "Q", "V2"],
                                         defaults=[15.0, 5.0, 8.0, 30.0],
                                         units=["L", "L/h", "L/h", "L"],
@@ -327,12 +462,54 @@ MODELS = {
                                      defaults=[15.0, 5.0, 8.0, 30.0],
                                      units=["L", "L/h", "L/h", "L"],
                                      ranges=[(5.0, 50.0), (0.5, 30.0), (1.0, 30.0), (10.0, 150.0)]),
+    "2-Compartment (IV Bolus - Rate k)": dict(fn=None, params=["V", "k12", "k21", "k"],
+                                              defaults=[15.0, 0.5, 0.2, 0.3], units=["L", "1/h", "1/h", "1/h"],
+                                              ranges=[(5.0, 50.0), (0.01, 5.0), (0.01, 5.0), (0.01, 2.0)]),
+    "2-Compartment (IV Infusion - Rate k)": dict(fn=None, params=["V", "k12", "k21", "k"],
+                                                 defaults=[15.0, 0.5, 0.2, 0.3], units=["L", "1/h", "1/h", "1/h"],
+                                                 ranges=[(5.0, 50.0), (0.01, 5.0), (0.01, 5.0), (0.01, 2.0)]),
+    "3-Compartment (Oral)": dict(fn=None, params=["ka", "V1", "CL", "Q2", "V2", "Q3", "V3"],
+                                 defaults=[1.2, 12.0, 4.0, 6.0, 25.0, 3.0, 60.0],
+                                 units=["1/h", "L", "L/h", "L/h", "L", "L/h", "L"],
+                                 ranges=[(0.1, 5.0), (3.0, 40.0), (0.5, 20.0), (0.5, 20.0), (5.0, 80.0), (0.5, 20.0), (10.0, 200.0)]),
+    "3-Compartment (IV Infusion)": dict(fn=None, params=["V1", "CL", "Q2", "V2", "Q3", "V3"],
+                                        defaults=[12.0, 4.0, 6.0, 25.0, 3.0, 60.0],
+                                        units=["L", "L/h", "L/h", "L", "L/h", "L"],
+                                        ranges=[(3.0, 40.0), (0.5, 20.0), (0.5, 20.0), (5.0, 80.0), (0.5, 20.0), (10.0, 200.0)]),
+    "3-Compartment (IV Bolus)": dict(fn=None, params=["V1", "CL", "Q2", "V2", "Q3", "V3"],
+                                     defaults=[12.0, 4.0, 6.0, 25.0, 3.0, 60.0],
+                                     units=["L", "L/h", "L/h", "L", "L/h", "L"],
+                                     ranges=[(3.0, 40.0), (0.5, 20.0), (0.5, 20.0), (5.0, 80.0), (0.5, 20.0), (10.0, 200.0)]),
     "Michaelis-Menten": dict(fn=model_mm, params=["V", "Vmax", "Km"],
                              defaults=[20.0, 10.0, 2.0], units=["L", "mg/h", "mg/L"],
                              ranges=[(5.0, 50.0), (1.0, 50.0), (0.1, 20.0)]),
     "1-Compartment IV infusion (multi-dose)": dict(fn=None, params=["CL", "V"],
                                                    defaults=[5.0, 40.0], units=["L/h", "L"],
                                                    ranges=[(0.5, 30.0), (5.0, 150.0)]),
+    "Direct Emax (PD)": dict(fn=None, params=["E0", "Emax", "EC50"],
+                             defaults=[0.0, 100.0, 10.0], units=["", "", "mg/L"],
+                             ranges=[(0.0, 100.0), (1.0, 500.0), (0.1, 100.0)]),
+    "Sigmoidal Emax (PD)": dict(fn=None, params=["E0", "Emax", "EC50", "gamma"],
+                                defaults=[0.0, 100.0, 10.0, 1.0], units=["", "", "mg/L", ""],
+                                ranges=[(0.0, 100.0), (1.0, 500.0), (0.1, 100.0), (0.1, 5.0)]),
+    "Inhibitory Emax (PD)": dict(fn=None, params=["E0", "Imax", "IC50"],
+                                 defaults=[100.0, 1.0, 10.0], units=["", "", "mg/L"],
+                                 ranges=[(1.0, 500.0), (0.01, 1.0), (0.1, 100.0)]),
+    "Turnover Inhibition (PD)": dict(fn=None, params=["Rin", "kout", "Imax", "IC50"],
+                                     defaults=[10.0, 0.1, 1.0, 10.0], units=["1/h", "1/h", "", "mg/L"],
+                                     ranges=[(0.1, 100.0), (0.001, 5.0), (0.01, 1.0), (0.1, 100.0)]),
+    "Turnover Stimulation (PD)": dict(fn=None, params=["Rin", "kout", "Smax", "SC50"],
+                                      defaults=[10.0, 0.1, 5.0, 10.0], units=["1/h", "1/h", "", "mg/L"],
+                                      ranges=[(0.1, 100.0), (0.001, 5.0), (0.1, 20.0), (0.1, 100.0)]),
+    "PKPD Link Direct": dict(fn=None, params=["V", "CL", "E0", "Emax", "EC50"],
+                             defaults=[20.0, 5.0, 0.0, 100.0, 10.0], units=["L", "L/h", "", "", "mg/L"],
+                             ranges=[(5.0, 100.0), (1.0, 30.0), (0.0, 100.0), (1.0, 500.0), (0.1, 100.0)]),
+    "TMDD Quasi-Equilibrium": dict(fn=None, params=["V1", "kel", "kint", "KD", "Rtot"],
+                                   defaults=[5.0, 0.1, 0.05, 0.1, 10.0], units=["L", "1/h", "1/h", "nM", "nM"],
+                                   ranges=[(1.0, 20.0), (0.01, 2.0), (0.001, 1.0), (0.001, 10.0), (0.1, 100.0)]),
+    "TTE Weibull": dict(fn=None, params=["lambda", "beta"],
+                        defaults=[0.05, 1.2], units=["1/h", ""],
+                        ranges=[(0.001, 2.0), (0.1, 5.0)]),
 }
 
 
@@ -341,7 +518,7 @@ def predict(model_name, t, dose, phi, data=None, sub_doses=None, sub_cov=None,
     """phi [M,P] = log tham số cá thể. Trả về [M,T]; giá trị không hữu hạn -> 0 / 1e30."""
     has_sub_doses = (sub_doses is not None) or (data is not None and "sub_doses" in data)
     
-    if has_sub_doses or model_name == "1-Compartment IV infusion (multi-dose)":
+    if has_sub_doses or model_name in MODELS:
         M = phi.shape[0]
         T = t.shape[1] if hasattr(t, "shape") and t.ndim > 1 else len(t)
         out = np.zeros((M, T), dtype=float)
@@ -426,11 +603,26 @@ def predict(model_name, t, dose, phi, data=None, sub_doses=None, sub_cov=None,
                                 
                 c_pred = solve_1cpt_infusion(d_list, default_tinf, t_row, cl_events, V_val)
                 out[m, :] = c_pred
+
+            elif model_name == "1-Compartment (IV Infusion)":
+                V_val = float(np.exp(phi[m, 0]))
+                CL_val = float(np.exp(phi[m, 1]))
+                out[m, :] = solve_1cpt_infusion(d_list, default_tinf, t_row, CL_val, V_val)
             
             elif model_name == "1-Compartment (IV Bolus)":
                 V_val = float(np.exp(phi[m, 0]))
                 CL_val = float(np.exp(phi[m, 1]))
                 out[m, :] = solve_1cpt_infusion(d_list, 0.01, t_row, CL_val, V_val)
+
+            elif model_name == "1-Compartment (IV Bolus - Rate k)":
+                V_val = float(np.exp(phi[m, 0]))
+                k_val = float(np.exp(phi[m, 1]))
+                out[m, :] = solve_1cpt_infusion(d_list, 0.01, t_row, k_val * V_val, V_val)
+
+            elif model_name == "1-Compartment (IV Infusion - Rate k)":
+                V_val = float(np.exp(phi[m, 0]))
+                k_val = float(np.exp(phi[m, 1]))
+                out[m, :] = solve_1cpt_infusion(d_list, default_tinf, t_row, k_val * V_val, V_val)
                 
             elif model_name in ["2-Compartment (IV Infusion)", "2-Compartment (IV Bolus)"]:
                 V1_val = float(np.exp(phi[m, 0]))
@@ -439,12 +631,42 @@ def predict(model_name, t, dose, phi, data=None, sub_doses=None, sub_cov=None,
                 V2_val = float(np.exp(phi[m, 3]))
                 tinf_use = 0.01 if "Bolus" in model_name else default_tinf
                 out[m, :] = solve_2cpt_iv_multidose(d_list, tinf_use, t_row, V1_val, CL_val, Q_val, V2_val)
+
+            elif model_name in ["2-Compartment (IV Bolus - Rate k)", "2-Compartment (IV Infusion - Rate k)"]:
+                V_val = float(np.exp(phi[m, 0]))
+                k12 = float(np.exp(phi[m, 1]))
+                k21 = float(np.exp(phi[m, 2]))
+                k_val = float(np.exp(phi[m, 3]))
+                CL_val = k_val * V_val
+                Q_val = k12 * V_val
+                V2_val = V_val * (k12 / max(k21, 1e-6))
+                tinf_use = 0.01 if "Bolus" in model_name else default_tinf
+                out[m, :] = solve_2cpt_iv_multidose(d_list, tinf_use, t_row, V_val, CL_val, Q_val, V2_val)
+
+            elif model_name in ["3-Compartment (IV Infusion)", "3-Compartment (IV Bolus)"]:
+                V1_val = float(np.exp(phi[m, 0]))
+                CL_val = float(np.exp(phi[m, 1]))
+                Q2_val = float(np.exp(phi[m, 2]))
+                V2_val = float(np.exp(phi[m, 3]))
+                Q3_val = float(np.exp(phi[m, 4]))
+                V3_val = float(np.exp(phi[m, 5]))
+                tinf_use = 0.01 if "Bolus" in model_name else default_tinf
+                out[m, :] = solve_3cpt_iv_multidose(d_list, tinf_use, t_row, V1_val, CL_val, Q2_val, V2_val, Q3_val, V3_val)
                 
             elif model_name == "1-Compartment (Oral)":
                 ka_val = float(np.exp(phi[m, 0]))
                 V_val = float(np.exp(phi[m, 1]))
                 CL_val = float(np.exp(phi[m, 2]))
                 out[m, :] = solve_1cpt_oral_multidose(d_list, t_row, ka_val, V_val, CL_val)
+
+            elif model_name == "1-Compartment (Oral with Tlag)":
+                tlag_val = float(np.exp(phi[m, 0]))
+                ka_val = float(np.exp(phi[m, 1]))
+                V_val = float(np.exp(phi[m, 2]))
+                CL_val = float(np.exp(phi[m, 3]))
+                t_eff = np.maximum(t_row - tlag_val, 0.0)
+                conc_eff = solve_1cpt_oral_multidose(d_list, t_eff, ka_val, V_val, CL_val)
+                out[m, :] = np.where(t_row >= tlag_val, conc_eff, 0.0)
                 
             elif model_name == "2-Compartment (Oral)":
                 ka_val = float(np.exp(phi[m, 0]))
@@ -453,12 +675,64 @@ def predict(model_name, t, dose, phi, data=None, sub_doses=None, sub_cov=None,
                 Q_val = float(np.exp(phi[m, 3]))
                 V2_val = float(np.exp(phi[m, 4]))
                 out[m, :] = solve_2cpt_oral_multidose(d_list, t_row, ka_val, V1_val, CL_val, Q_val, V2_val)
+
+            elif model_name == "2-Compartment (Oral with Tlag)":
+                tlag_val = float(np.exp(phi[m, 0]))
+                ka_val = float(np.exp(phi[m, 1]))
+                V1_val = float(np.exp(phi[m, 2]))
+                CL_val = float(np.exp(phi[m, 3]))
+                Q_val = float(np.exp(phi[m, 4]))
+                V2_val = float(np.exp(phi[m, 5]))
+                t_eff = np.maximum(t_row - tlag_val, 0.0)
+                conc_eff = solve_2cpt_oral_multidose(d_list, t_eff, ka_val, V1_val, CL_val, Q_val, V2_val)
+                out[m, :] = np.where(t_row >= tlag_val, conc_eff, 0.0)
+
+            elif model_name == "3-Compartment (Oral)":
+                ka_val = float(np.exp(phi[m, 0]))
+                V1_val = float(np.exp(phi[m, 1]))
+                CL_val = float(np.exp(phi[m, 2]))
+                Q2_val = float(np.exp(phi[m, 3]))
+                V2_val = float(np.exp(phi[m, 4]))
+                Q3_val = float(np.exp(phi[m, 5]))
+                V3_val = float(np.exp(phi[m, 6]))
+                out[m, :] = solve_3cpt_oral_multidose(d_list, t_row, ka_val, V1_val, CL_val, Q2_val, V2_val, Q3_val, V3_val)
                 
             elif model_name == "Michaelis-Menten":
                 V_val = float(np.exp(phi[m, 0]))
                 Vmax_val = float(np.exp(phi[m, 1]))
                 Km_val = float(np.exp(phi[m, 2]))
                 out[m, :] = solve_mm_multidose(d_list, t_row, V_val, Vmax_val, Km_val)
+
+            elif model_name == "Direct Emax (PD)":
+                E0 = float(np.exp(phi[m, 0]))
+                Emax = float(np.exp(phi[m, 1]))
+                EC50 = float(np.exp(phi[m, 2]))
+                out[m, :] = E0 + (Emax * t_row) / np.maximum(EC50 + t_row, 1e-6)
+
+            elif model_name == "Sigmoidal Emax (PD)":
+                E0 = float(np.exp(phi[m, 0]))
+                Emax = float(np.exp(phi[m, 1]))
+                EC50 = float(np.exp(phi[m, 2]))
+                gam = float(np.exp(phi[m, 3]))
+                c_gam = np.power(np.maximum(t_row, 0.0), gam)
+                ec_gam = np.power(EC50, gam)
+                out[m, :] = E0 + (Emax * c_gam) / np.maximum(ec_gam + c_gam, 1e-6)
+
+            elif model_name == "Inhibitory Emax (PD)":
+                E0 = float(np.exp(phi[m, 0]))
+                Imax = float(np.exp(phi[m, 1]))
+                IC50 = float(np.exp(phi[m, 2]))
+                out[m, :] = E0 * (1.0 - (Imax * t_row) / np.maximum(IC50 + t_row, 1e-6))
+
+            elif model_name == "PKPD Link Direct":
+                V_val = float(np.exp(phi[m, 0]))
+                CL_val = float(np.exp(phi[m, 1]))
+                E0 = float(np.exp(phi[m, 2]))
+                Emax = float(np.exp(phi[m, 3]))
+                EC50 = float(np.exp(phi[m, 4]))
+                tinf_use = 0.01 if "Bolus" in model_name else default_tinf
+                c_pred = solve_1cpt_infusion(d_list, tinf_use, t_row, CL_val, V_val)
+                out[m, :] = E0 + (Emax * c_pred) / np.maximum(EC50 + c_pred, 1e-6)
                 
             else:
                 m_info = MODELS.get(model_name)

@@ -216,12 +216,18 @@ def render_model_cards(matched, tab_key="pk"):
             if st.button("✅ Chọn Model này", key=f"sel_mod_{m['id']}_{tab_key}", type="primary", use_container_width=True):
                 st.session_state["selected_lib_model"] = m["id"]
                 st.session_state["model_name_choice"] = m["internal_model"]
+                st.session_state["model_structure_select"] = m["internal_model"]
+                # Cập nhật thông số ban đầu vào session_state slider
+                if "params" in m and "defaults" in m:
+                    for p_name, p_def in zip(m["params"], m["defaults"]):
+                        st.session_state[f"{m['internal_model']}_pop_{p_name}"] = float(p_def)
                 if m.get("tinf_override") is not None:
                     st.session_state["tinf_val"] = m["tinf_override"]
                     st.session_state["tinf_upload_input"] = float(m["tinf_override"])
                     st.session_state["tinf_main_input"] = float(m["tinf_override"])
                 if m.get("error_override"):
                     st.session_state["error_model_choice"] = m["error_override"]
+                    st.session_state["error_model_select"] = m["error_override"]
                 st.rerun()
         st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #e2e8f0;'/>", unsafe_allow_html=True)
 
@@ -798,6 +804,7 @@ def render_dynamic_model_equations(res, clinical_data=None, show_scm_benchmark=T
 
 
 def show_fit(res, clinical_data=None):
+    st.info(f"🧬 **Mô hình Dược động học vừa ước lượng:** `{res.get('model_name', 'Mô hình')}`")
     ic = res["ic"]
     bad = [(lab, r) for lab, ok, r in pk.convergence_report(res) if not ok]
     if bad:
@@ -1049,13 +1056,14 @@ def main():
         clinical_data = None
         df_sim = None
 
-        is_bolus_mode = (st.session_state.get("selected_lib_model") == "bolus_1cpt_VCl")
+        selected_lib_id = st.session_state.get("selected_lib_model", "")
+        is_bolus_mode = str(selected_lib_id).startswith("bolus_")
 
         if data_source_opt == "Dataset lâm sàng (Dataset_chính_thức.xlsx)":
             excel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "Dataset_chính_thức.xlsx"))
             if is_bolus_mode:
                 tinf = 0.01
-                st.caption("⚡ **Chế độ Monolix bolus_1cpt_VCl**: tinf = 0.01 h (Bolus tức thời)")
+                st.caption(f"⚡ **Chế độ Monolix {selected_lib_id}**: tinf = 0.01 h (Bolus tức thời)")
             else:
                 tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_main_input")
             clinical_data = data_io.load_dataset(excel_path, tinf=tinf, enforce_g4=True)
@@ -1064,7 +1072,7 @@ def main():
             uploaded_file = st.file_uploader("Tải lên file dữ liệu", type=["xlsx", "xls", "csv"])
             if is_bolus_mode:
                 tinf = 0.01
-                st.caption("⚡ **Chế độ Monolix bolus_1cpt_VCl**: tinf = 0.01 h (Bolus tức thời)")
+                st.caption(f"⚡ **Chế độ Monolix {selected_lib_id}**: tinf = 0.01 h (Bolus tức thời)")
             else:
                 tinf = st.number_input("Thời gian truyền tinf (giờ)", 0.01, 24.0, float(st.session_state.get("tinf_val", 1.0)), 0.05, key="tinf_upload_input")
             if uploaded_file is not None:
@@ -1099,13 +1107,44 @@ def main():
 
         st.markdown("### :material/settings: Cấu hình mô hình")
         model_names = list(pk.MODELS.keys())
-        if "model_name_choice" in st.session_state and st.session_state["model_name_choice"] in model_names:
-            default_idx = model_names.index(st.session_state["model_name_choice"])
-        elif default_model in model_names:
-            default_idx = model_names.index(default_model)
-        else:
-            default_idx = 0
-        model_name = st.selectbox(":material/schema: Mô hình cấu trúc", model_names, index=default_idx)
+
+        # Luôn đồng bộ mô hình khi có model được chọn từ thư viện Monolix
+        if "selected_lib_model" in st.session_state:
+            lib_id = st.session_state["selected_lib_model"]
+            lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
+            if lib_id in lib_map:
+                target_model = lib_map[lib_id]["internal_model"]
+                if target_model in model_names and st.session_state.get("model_structure_select") != target_model:
+                    st.session_state["model_structure_select"] = target_model
+                    st.session_state.pop("res", None)
+                    st.session_state.pop("vpc", None)
+
+        if "model_structure_select" not in st.session_state:
+            if "model_name_choice" in st.session_state and st.session_state["model_name_choice"] in model_names:
+                st.session_state["model_structure_select"] = st.session_state["model_name_choice"]
+            elif default_model in model_names:
+                st.session_state["model_structure_select"] = default_model
+            else:
+                st.session_state["model_structure_select"] = model_names[0]
+        elif st.session_state["model_structure_select"] not in model_names:
+            st.session_state["model_structure_select"] = model_names[0]
+
+        def on_model_structure_change():
+            cur = st.session_state.get("model_structure_select")
+            cur_lib = st.session_state.get("selected_lib_model")
+            if cur_lib:
+                lib_map = {m["id"]: m for m in MONOLIX_LIBRARY}
+                if cur_lib in lib_map and lib_map[cur_lib]["internal_model"] != cur:
+                    st.session_state.pop("selected_lib_model", None)
+            st.session_state.pop("res", None)
+            st.session_state.pop("vpc", None)
+
+        model_name = st.selectbox(
+            ":material/schema: Mô hình cấu trúc",
+            model_names,
+            key="model_structure_select",
+            on_change=on_model_structure_change
+        )
         mi = pk.MODELS[model_name]
         names = mi["params"]
         key = lambda s: f"{model_name}_{s}"
@@ -1121,9 +1160,12 @@ def main():
 
         st.markdown("### :material/show_chart: Mô hình sai số dư")
         err_models = ["combined", "combined1", "constant", "proportional"]
-        err_def = st.session_state.get("error_model_choice", "combined")
-        err_idx = err_models.index(err_def) if err_def in err_models else 0
-        error_model = st.selectbox("Error Model", err_models, index=err_idx)
+        if "error_model_select" not in st.session_state:
+            err_def = st.session_state.get("error_model_choice", "combined")
+            st.session_state["error_model_select"] = err_def if err_def in err_models else "combined"
+        elif st.session_state["error_model_select"] not in err_models:
+            st.session_state["error_model_select"] = "combined"
+        error_model = st.selectbox("Error Model", err_models, key="error_model_select")
         c_err1, c_err2 = st.columns(2)
         sigma_add = c_err1.number_input("a (additive)", 0.01, 5.0, 1.0, 0.1)
         sigma_prop = c_err2.number_input("b (proportional)", 0.01, 1.0, 0.2, 0.02)
@@ -1244,10 +1286,10 @@ def main():
 
     # ── TAB 2: CẤU HÌNH & ƯỚC LƯỢNG SAEM + BOOTSTRAP ──
     with tab2:
-        header("Chạy ước lượng tham số bằng thuật toán SAEM")
+        header(f"Chạy ước lượng tham số SAEM: {model_name}")
         target_data = clinical_data if clinical_data is not None else df_sim
-        st.info("Thuật toán SAEM (Stochastic Approximation Expectation-Maximization) với MCMC 3 kernel kết hợp giải tích từng đoạn. Tính toán -2LL qua Importance Sampling phân phối Student-t5.")
-        if st.button("Bắt đầu ước lượng SAEM", type="primary", width="stretch", icon=":material/play_arrow:"):
+        st.info(f"Đang phân tích mô hình: **{model_name}**. Thuật toán SAEM với MCMC 3 kernel kết hợp giải tích từng đoạn. Tính toán -2LL qua Importance Sampling phân phối Student-t5.")
+        if st.button(f"🚀 Bắt đầu ước lượng SAEM ({model_name})", type="primary", width="stretch", icon=":material/play_arrow:"):
             init = dict(
                 mu=np.log([pop_params[p] for p in names]),
                 omega=[omega_dict[p] for p in names],
